@@ -112,3 +112,49 @@ fn gfm_spec_extensions() {
         GFM_EXTENSIONS.contains(&tag)
     });
 }
+
+/// Html that the spec round trip can't reach, because its input is always
+/// html that pulldown-cmark rendered from Markdown. Each case is an input
+/// and the html it should show after `md` and a render.
+const HTML_INPUTS: &[(&str, &str)] = &[
+    // emphasis whose `*` run wouldn't be left- or right-flanking
+    ("<p><em>a.</em>b</p>", "<p><em>a.</em>b</p>"),
+    (
+        "<p>a<strong>-b-</strong>c</p>",
+        "<p>a<strong>-b-</strong>c</p>",
+    ),
+    // emphasis around a block
+    ("<em><p>a</p></em>", "<p><em>a</em></p>"),
+    // a link's leading space
+    (
+        "<p>x<a href=\"/u\"> a</a></p>",
+        "<p>x<a href=\"/u\"> a</a></p>",
+    ),
+    // a literal tilde run
+    ("<p>~a~</p>", "<p>~a~</p>"),
+    // a literal backtick before a code span
+    ("<p>a`<code>b</code></p>", "<p>a`<code>b</code></p>"),
+    // a backslash before a pipe in a table cell's code
+    (
+        "<table><thead><tr><th>h</th></tr></thead><tbody>\n<tr><td><code>a\\|b</code></td></tr>\n</tbody></table>",
+        "<table><thead><tr><th>h</th></tr></thead><tbody>\n<tr><td><code>a\\|b</code></td></tr>\n</tbody></table>",
+    ),
+];
+
+#[test]
+fn html_inputs() {
+    let mut failures = Vec::new();
+    for &(input, want) in HTML_INPUTS {
+        let md = Document::from(input).md(None);
+        let got = as_shown(&render(&md));
+        if got != as_shown(want) {
+            eprintln!("=== {input}\n--- md\n{md}\n--- want\n{want}\n--- got\n{got}\n");
+            failures.push(input);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures: {failures:?}",
+        failures.len()
+    );
+}

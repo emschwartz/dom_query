@@ -9,6 +9,15 @@ All notable changes to the `dom_query` crate will be documented in this file.
 
 ### Fixed
 - **Markdown**: write a table that has only a header row as a table instead of plain text.
+- **Markdown**: escape `~` everywhere; a `~~~` line opened a code fence and `~~x~~` rendered as strikethrough.
+- **Markdown**: escape an ordered-list marker split across nodes (`<span>1</span>. text`), and stop escaping numbers longer than nine digits, which cannot be a marker.
+- **Markdown**: escape a `!` right before a link or image, so `Wow!<a>` no longer becomes image syntax.
+- **Markdown**: write nothing for a link whose text is only whitespace.
+- **Markdown**: write no space between a literal backtick and the code span that follows it.
+- **Markdown**: keep a link that wraps block elements on one line; a blank line inside `[...]` broke the link.
+- **Markdown**: treat an `<img>` without any source as absent when choosing a link's body, and skip leading commas in `srcset`.
+- **Markdown**: separate `<figcaption>`, `<dt>` and `<dd>` from adjacent content, and a list item's lead-in text from its first block child.
+- **Markdown**: join block children of a table cell with `<br>` and drop a trailing `<br>` from a cell.
 - **Markdown**: keep a row-header `<th>` in its own row instead of moving it into the table's header row.
 - **Markdown**: write a nested list on the line after its parent item's text instead of after a blank line, which made the parent list loose (every item wrapped in `<p>`).
 - **Markdown**: escape a trailing run of `#` in a heading, which was dropped as the ATX closing sequence, and a line of only `=`, which turned the line above it into a setext heading.

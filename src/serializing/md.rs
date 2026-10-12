@@ -1006,7 +1006,7 @@ R 2, *C 1* R 2, *C 2*";
     </tr>
 </table>";
         let expected =
-            "|   |   |\n| - | - |\n| 1 | + Lemon<br>+ Lime<br>+ Grapefruit<br>+ Orange<br> |";
+            "|   |   |\n| - | - |\n| 1 | + Lemon<br>+ Lime<br>+ Grapefruit<br>+ Orange |";
         html_2md_compare(contents, expected);
     }
 
@@ -1286,5 +1286,147 @@ fn main() {
 
         html_2md_compare("<p><b>a</b><em>b</em></p>", "**a***b*");
         html_2md_compare("<p><b>a</b> <em>b</em></p>", "**a** *b*");
+    }
+
+    #[test]
+    fn test_tilde_escaping() {
+        // a `~~~` line opens a code fence, and `~~x~~` is strikethrough in GFM
+        html_2md_compare("<p>~~~</p><p>code?</p>", "\\~\\~\\~\n\ncode?");
+        html_2md_compare("<p>~~strike~~</p>", "\\~\\~strike\\~\\~");
+        html_2md_compare("<p>me@h:~/a$ make</p>", "me@h:\\~/a$ make");
+        // code content is written as is
+        html_2md_compare("<p><code>~/a</code></p>", "`~/a`");
+    }
+
+    #[test]
+    fn test_split_ordered_list_marker() {
+        // digits at a line start and a `.` from the next node form a list marker
+        html_2md_compare("<p><span>1</span>. foo</p>", "1\\. foo");
+        html_2md_compare("<p>1<span>. not a list</span></p>", "1\\. not a list");
+        html_2md_compare("<ul><li><span>2</span>) x</li></ul>", "- 2\\) x");
+        // mid-line digits are not a marker
+        html_2md_compare("<p><b>see</b> <span>1</span>. foo</p>", "**see** 1. foo");
+        // a marker has at most nine digits
+        html_2md_compare("<p>1234567890. x</p>", "1234567890. x");
+    }
+
+    #[test]
+    fn test_bang_before_link_or_image() {
+        // a trailing `!` must not turn the link into image syntax
+        html_2md_compare(
+            r#"<p>Wow!<a href="https://e.com">x</a></p>"#,
+            r"Wow\![x](https://e.com)",
+        );
+        // a backslash before it is text and does not escape the `!`
+        html_2md_compare(
+            r#"<p>Wow\!<a href="https://e.com">x</a></p>"#,
+            r"Wow\\\![x](https://e.com)",
+        );
+        html_2md_compare(
+            r#"<p>Wow!<a href="u"><img src="i.png" alt="a"></a></p>"#,
+            r"Wow\![![a](i.png)](u)",
+        );
+        html_2md_compare(
+            "<p>Wow!<img src=\"i.png\" alt=\"a\"></p>",
+            "Wow\\!![a](i.png)",
+        );
+    }
+
+    #[test]
+    fn test_escaped_backtick_before_code_span() {
+        html_2md_compare("<p>a`<code>b</code></p>", "a\\``b`");
+        html_2md_compare("<p><code>a</code><code>b</code></p>", "`a` `b`");
+    }
+
+    #[test]
+    fn test_whitespace_only_link() {
+        html_2md_compare(
+            "<h2>VMAF <a href=\"#vmaf\"> </a></h2><p>body</p>",
+            "## VMAF\n\nbody",
+        );
+    }
+
+    #[test]
+    fn test_card_link_with_image_and_blocks() {
+        // a blank line inside `[...]` ends the paragraph and breaks the link
+        html_2md_compare(
+            "<div><a href=\"/card\"><div><img src=\"t.png\"></div><p>Caption text</p></a></div>",
+            "[![](t.png) Caption text](/card)",
+        );
+        html_2md_compare(
+            "<a href=\"http://x\"><img src=\"a.jpg\" alt=\"i\"><h3>Title</h3><p>desc</p></a>",
+            "[![i](a.jpg) ### Title desc](http://x)",
+        );
+        // an image without any source writes nothing, so the link keeps its
+        // plain-text body
+        html_2md_compare(
+            "<div><a href=\"/p/1\"><img class=\"avatar\"><div>Name</div><div>Follow</div></a></div>",
+            "[NameFollow](/p/1)",
+        );
+    }
+
+    #[test]
+    fn test_img_srcset_leading_comma() {
+        html_2md_compare(
+            "<p><img srcset=\", a.png 2x\" alt=\"pic\"></p>",
+            "![pic](a.png)",
+        );
+    }
+
+    #[test]
+    fn test_list_item_with_inline_then_block() {
+        // the paragraph must not merge into the marker line, nor into the
+        // lead-in text as a lazy continuation line
+        html_2md_compare("<ul><li>a<p>more a</p></li></ul>", "- a\n\n  more a");
+        html_2md_compare(
+            "<ol start=\"10\"><li>lead<p>block</p></li></ol>",
+            "10. lead\n\n    block",
+        );
+        // a whitespace-only lead-in must not trigger the break
+        html_2md_compare(
+            "<ul><li>\n  <p>first</p>\n  <p>second</p>\n</li></ul>",
+            "- first\n\n  second",
+        );
+        // a wrapped nested list stays tight
+        html_2md_compare(
+            "<ul><li>a<div><ul><li>b</li></ul></div></li></ul>",
+            "- a\n    - b",
+        );
+    }
+
+    #[test]
+    fn test_adjacent_inline_blocks_separated() {
+        // the caption must not glue to the image markdown
+        html_2md_compare(
+            "<figure><img src=\"https://i.e.com/p.png\" alt=\"f\"><figcaption>Photo Credit: Reddit</figcaption></figure>",
+            "![f](https://i.e.com/p.png)\n\nPhoto Credit: Reddit",
+        );
+        html_2md_compare("<dl><dt>Term</dt><dd>Def</dd></dl>", "Term\n\nDef");
+        // block children of a table cell are joined with the cell linebreak
+        html_2md_compare(
+            "<table><tr><th>H</th></tr><tr><td><p>para1</p><p>para2</p></td></tr></table>",
+            "| H |\n| - |\n| para1<br>para2 |",
+        );
+    }
+
+    #[test]
+    fn test_table_cell_trailing_br() {
+        html_2md_compare(
+            "<table><tr><th>a</th></tr><tr><td>x<br></td></tr></table>",
+            "| a |\n| - |\n| x |",
+        );
+        // text that reads `<br>` at the end of a cell is not a linebreak
+        html_2md_compare(
+            "<table><tr><th>H</th></tr><tr><td>use &lt;br&gt;</td></tr></table>",
+            "| H |\n| - |\n| use \\<br> |",
+        );
+    }
+
+    #[test]
+    fn test_table_cell_code_and_link_pipes() {
+        html_2md_compare(
+            "<table><tr><th>a</th></tr><tr><td><code>a|b</code> <a href=\"http://x/a|b\">l</a></td></tr></table>",
+            "| a |\n| - |\n| `a\\|b` [l](http://x/a\\|b) |",
+        );
     }
 }

@@ -13,9 +13,9 @@ use super::constants::{
 };
 
 use super::text_utils::{
-    add_linebreaks, escape_closing_hashes, escape_table_cell_inplace, linebreak, max_backtick_run,
-    push_code_text, push_emphasis, push_md_url, push_normalized_text, push_title,
-    sanitize_attr_value, trim_space, trim_trailing_space,
+    add_linebreaks, ends_with_escape, escape_closing_hashes, escape_table_cell_inplace,
+    escape_trailing_bang, linebreak, max_backtick_run, push_code_text, push_emphasis, push_md_url,
+    push_normalized_text, push_title, sanitize_attr_value, trim_space, trim_trailing_space,
 };
 
 use super::opts::{EmphasisScope, FormatOpts, ListContext, ListKind};
@@ -75,7 +75,9 @@ impl<'a> MDSerializer<'a> {
                             // linebreaks are disabled for md blocks if md is skipped (for code)
                             // or we are dealing with a table cell
                             if !opts.skip_md {
-                                if !opts.table_cell && is_md_block(&e.name) {
+                                if opts.table_cell && is_md_block(&e.name) {
+                                    add_cell_block_break(text, linebreak);
+                                } else if is_md_block(&e.name) {
                                     let node = NodeRef::new(id, self.root_node.tree);
                                     // a blank line before a nested list would make the parent list loose
                                     let tight = opts.list_item
@@ -111,7 +113,9 @@ impl<'a> MDSerializer<'a> {
                         if is_heading(name) {
                             escape_closing_hashes(text);
                         }
-                        if !opts.table_cell && is_md_block(name) {
+                        if opts.table_cell && is_md_block(name) {
+                            add_cell_block_break(text, linebreak);
+                        } else if is_md_block(name) {
                             add_linebreaks(text, linebreak, &double_br);
                         } else if matches!(
                             name.local,
@@ -230,15 +234,27 @@ impl<'a> MDSerializer<'a> {
 
         let item_start = text.len();
         let mut is_first_block = true;
+        let mut seen_inline = false;
         for c in child_node.children_it(false) {
             if node_is_list_item_block(&c) {
+                let is_indented = c.has_name("pre") || c.has_name("blockquote");
                 if is_first_block {
                     is_first_block = false;
+                    if seen_inline && !is_indented && !starts_with_list(&c) {
+                        // without a blank line the first block would continue
+                        // the lead-in text written on the marker line
+                        trim_trailing_space(text);
+                        text.push_str(ctx.linebreak());
+                        if !ctx.opts.table_cell {
+                            text.push_str(ctx.linebreak());
+                        }
+                        text.push_str(&block_indent);
+                    }
                 } else {
                     text.push_str(&block_indent);
                 }
 
-                if c.has_name("pre") || c.has_name("blockquote") {
+                if is_indented {
                     self.write_list_item_indented(text, &c, &block_indent, item_start, ctx);
                 } else {
                     self.write(text, c.id, ctx.opts.list_item());
@@ -246,6 +262,7 @@ impl<'a> MDSerializer<'a> {
                 text.push_str(ctx.linebreak());
                 text.push_str(ctx.linebreak());
             } else {
+                seen_inline |= !node_is_list(&c) && !is_blank_text(&c);
                 self.write(text, c.id, ctx.opts.include_node());
             }
         }
@@ -362,8 +379,12 @@ impl<'a> MDSerializer<'a> {
             self.write_text(&mut link_text, link_node.id, link_opts);
         }
         // serialize as markdown if body contains images or non-text elements
-        if has_img || link_text.is_empty() {
-            self.write(&mut link_text, link_node.id, default_opts);
+        if has_img || link_text.trim_ascii().is_empty() {
+            let mut md_body = String::new();
+            self.write(&mut md_body, link_node.id, default_opts);
+            // a blank line inside `[...]` (a card-style link wrapping blocks)
+            // would end the paragraph and break the link
+            link_text = join_lines(&md_body);
             is_md_body = true;
         }
 
@@ -371,6 +392,8 @@ impl<'a> MDSerializer<'a> {
             return;
         }
 
+        // an unescaped trailing `!` would turn `[x](u)` into image syntax
+        escape_trailing_bang(text);
         text.push('[');
         if is_md_body {
             text.push_str(&link_text);
@@ -392,7 +415,7 @@ impl<'a> MDSerializer<'a> {
         descendant_nodes(Ref::clone(&self.nodes), id).any(|child_id| {
             matches!(
                 &self.nodes[child_id.value()].data,
-                NodeData::Element(e) if e.name.local == local_name!("img")
+                NodeData::Element(e) if e.name.local == local_name!("img") && img_src(e).is_some()
             )
         })
     }
@@ -402,20 +425,9 @@ impl<'a> MDSerializer<'a> {
             return;
         };
 
-        let src = el
-            .attr("src")
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                el.attr("srcset").and_then(|s| {
-                    s.split_ascii_whitespace()
-                        .next()
-                        .map(|u| u.trim_end_matches(','))
-                        .filter(|u| !u.is_empty())
-                        .map(StrTendril::from_slice)
-                })
-            })
-            .or_else(|| el.attr("data-src").filter(|s| !s.trim().is_empty()));
-        if let Some(src) = src {
+        if let Some(src) = img_src(el) {
+            // `Wow!` followed by `![` would swallow the text's own `!`
+            escape_trailing_bang(text);
             text.push_str("![");
 
             if let Some(alt) = el.attr_ref(local_name!("alt")) {
@@ -571,6 +583,7 @@ impl<'a> MDSerializer<'a> {
             for cell_ref in tr_ref.children_it(false).filter(is_table_cell) {
                 let mut cell_text = String::new();
                 self.write(&mut cell_text, cell_ref.id, opts);
+                trim_trailing_cell_break(&mut cell_text);
                 escape_table_cell_inplace(&mut cell_text);
                 row.push(cell_text);
             }
@@ -632,7 +645,75 @@ const fn is_md_block(name: &QualName) -> bool {
             | local_name!("dl")
             | local_name!("table")
             | local_name!("hr")
+            // figcaption follows a block-level image inside `figure`;
+            // dt/dd are the block children of `dl`
+            | local_name!("figcaption")
+            | local_name!("dt")
+            | local_name!("dd")
     )
+}
+
+/// Block children of a table cell are joined with a single cell linebreak,
+/// as a cell cannot hold a blank line.
+fn add_cell_block_break(text: &mut String, linebreak: &str) {
+    trim_trailing_space(text);
+    if !text.is_empty() && !text.ends_with(linebreak) && !text.ends_with('\n') {
+        text.push_str(linebreak);
+    }
+}
+
+/// Drops trailing cell linebreaks left by a final `<br>` or block child.
+fn trim_trailing_cell_break(text: &mut String) {
+    while let Some(rest) = text.strip_suffix("<br>") {
+        // `\<br>` is escaped cell text, not a linebreak
+        if ends_with_escape(rest) {
+            break;
+        }
+        text.truncate(rest.len());
+        trim_trailing_space(text);
+    }
+}
+
+/// The URL an `<img>` is written with: `src`, else the first `srcset`
+/// candidate, else `data-src` (lazy-load pages leave `src` empty).
+fn img_src(el: &Element) -> Option<StrTendril> {
+    el.attr("src")
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            el.attr("srcset").and_then(|s| {
+                // a srcset may start with whitespace and commas
+                s.trim_start_matches(|c: char| c == ',' || c.is_ascii_whitespace())
+                    .split_ascii_whitespace()
+                    .next()
+                    .map(|u| u.trim_end_matches(','))
+                    .filter(|u| !u.is_empty())
+                    .map(StrTendril::from_slice)
+            })
+        })
+        .or_else(|| el.attr("data-src").filter(|s| !s.trim().is_empty()))
+}
+
+/// Joins the non-empty lines of `text` with single spaces.
+fn join_lines(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+fn is_blank_text(node: &NodeRef) -> bool {
+    node.is_text() && node.text().trim().is_empty()
+}
+
+/// A wrapper whose first content is a list is written as that nested list.
+fn starts_with_list(node: &NodeRef) -> bool {
+    node.children_it(false)
+        .find(|c| !is_blank_text(c))
+        .is_some_and(|c| node_is_list(&c))
 }
 
 fn node_is_md_block(node: &NodeRef) -> bool {

@@ -17,10 +17,14 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
     let mut iter = new_text.split_ascii_whitespace();
 
     if let Some(first) = iter.next() {
+        let escape = !f_opts.skip_escape;
         if push_start_whitespace {
             result.push(' ');
+        } else if escape && first.starts_with(['.', ')']) && ends_with_marker_digits(text) {
+            // `<span>1</span>. foo`: the digits already written at the line
+            // start and this `.` would form an ordered-list marker
+            result.push('\\');
         }
-        let escape = !f_opts.skip_escape;
         // only the first word of a text node can continue a Markdown line
         let is_line_start = text.is_empty() || text.ends_with('\n') || f_opts.list_item;
         push_escaped_chunk(&mut result, first, escape, is_line_start);
@@ -41,13 +45,60 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
     }
 }
 
+/// True when the current line holds only indentation, optionally followed by
+/// a list marker opened on this line (`- `, `+ `, `12. `).
+fn at_block_start(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    // the marker, if any, is the last word and is followed by one space
+    let mut end = bytes.len();
+    if bytes.last() == Some(&b' ') {
+        end -= 1;
+    }
+    // an ordered marker has at most nine digits and its `.`/`)`, and the
+    // separator byte in front of it must be in the window too
+    let window = end.saturating_sub(11);
+    let marker_start = match bytes[window..end]
+        .iter()
+        .rposition(|&b| b == b' ' || b == b'\n')
+    {
+        Some(i) => window + i + 1,
+        None if window == 0 => 0,
+        None => return false,
+    };
+    let marker = &text[marker_start..end];
+    let is_marker =
+        end < bytes.len() && (matches!(marker, "-" | "+") || is_ordered_list_marker(marker));
+    if !is_marker && !marker.is_empty() {
+        return false;
+    }
+    // everything before, back to the line start, must be indentation
+    bytes[..marker_start]
+        .iter()
+        .rev()
+        .take_while(|&&b| b != b'\n')
+        .all(|&b| b == b' ')
+}
+
+/// True when the current line is a line start followed by one to nine
+/// digits, which a following `.` or `)` turns into an ordered-list marker.
+fn ends_with_marker_digits(text: &str) -> bool {
+    let digits = text
+        .bytes()
+        .rev()
+        .take(10)
+        .take_while(u8::is_ascii_digit)
+        .count();
+    (1..=9).contains(&digits) && at_block_start(&text[..text.len() - digits])
+}
+
 /// An ordered-list marker like `3.` or `12)` at the beginning of a line would
-/// otherwise turn the line into a list item.
+/// otherwise turn the line into a list item. `CommonMark` allows at most nine
+/// digits.
 fn is_ordered_list_marker(chunk: &str) -> bool {
     let Some(stem) = chunk.strip_suffix(['.', ')']) else {
         return false;
     };
-    !stem.is_empty() && stem.as_bytes().iter().all(u8::is_ascii_digit)
+    (1..=9).contains(&stem.len()) && stem.as_bytes().iter().all(u8::is_ascii_digit)
 }
 
 pub(super) fn push_escaped_chunk(text: &mut String, chunk: &str, escape: bool, line_start: bool) {
@@ -87,6 +138,23 @@ pub(super) fn push_escaped_chunk(text: &mut String, chunk: &str, escape: bool, l
     }
 
     text.push_str(&chunk[last..]);
+}
+
+/// Escapes an unescaped trailing `!` so the `[` or `![` written right after
+/// it cannot turn the text into image syntax (`Wow![x](u)`).
+pub(super) fn escape_trailing_bang(text: &mut String) {
+    if text
+        .strip_suffix('!')
+        .is_some_and(|rest| !ends_with_escape(rest))
+    {
+        text.insert(text.len() - 1, '\\');
+    }
+}
+
+/// True when `text` ends with an odd run of backslashes, which escapes the
+/// character written next.
+pub(super) fn ends_with_escape(text: &str) -> bool {
+    (text.len() - text.trim_end_matches('\\').len()) % 2 == 1
 }
 
 pub(super) fn trim_trailing_space(s: &mut String) {
@@ -260,8 +328,12 @@ pub(super) fn push_code_text(text: &mut String, code_text: &str) {
     }
 
     // a code span right before would merge its closing run with this
-    // opening one: `x` and `y` would give `x``y`, a single span
-    if text.ends_with('`') {
+    // opening one: `x` and `y` would give `x``y`, a single span; an escaped
+    // backtick is text and merges with nothing
+    if text
+        .strip_suffix('`')
+        .is_some_and(|rest| !ends_with_escape(rest))
+    {
         text.push(' ');
     }
 
@@ -330,6 +402,45 @@ pub(super) const fn linebreak(br: bool) -> &'static str {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn test_at_block_start() {
+        for text in [
+            "",
+            "\n",
+            "a\n",
+            "    ",
+            "a\n  ",
+            "- ",
+            "+ ",
+            "12. ",
+            "3) ",
+            "  - ",
+            "x\n    1. ",
+            "999999999. ",
+            "x\n999999999. ",
+            "x\n  123456789) ",
+        ] {
+            assert!(at_block_start(text), "{text:?}");
+        }
+        for text in [
+            "a",
+            "a ",
+            "-",
+            "- a",
+            "-  ",
+            "a - ",
+            "1.",
+            "1.x ",
+            "x1. ",
+            "1000000000. ",
+            "x\n1000000000. ",
+            "a\n  b ",
+            "中文 ",
+        ] {
+            assert!(!at_block_start(text), "{text:?}");
+        }
+    }
 
     #[test]
     fn test_escape_text() {

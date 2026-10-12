@@ -1333,6 +1333,18 @@ fn main() {
     }
 
     #[test]
+    fn test_bang_before_link_in_merged_emphasis() {
+        html_2md_compare(
+            r#"<p><b>Wow!<b><a href="u">x</a></b></b></p>"#,
+            r"**Wow\![x](u)**",
+        );
+        html_2md_compare(
+            r#"<p><b>Wow!</b><b><a href="u">x</a></b></p>"#,
+            r"**Wow\![x](u)**",
+        );
+    }
+
+    #[test]
     fn test_backtick_before_code_span() {
         html_2md_compare("<p>a`<code>b</code></p>", "a\\` `b`");
         html_2md_compare("<p><code>a</code><code>b</code></p>", "`a` `b`");

@@ -216,6 +216,10 @@ pub(super) fn push_emphasis(acc: &mut String, emphasis_content: &mut String, mar
         acc.push_str(marker);
     }
 
+    // emphasis merged into the one around or before it adds no marker here
+    if emphasis_content.starts_with('[') {
+        escape_trailing_bang(acc);
+    }
     acc.push_str(emphasis_content);
 }
 

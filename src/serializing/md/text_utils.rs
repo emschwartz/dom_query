@@ -328,12 +328,8 @@ pub(super) fn push_code_text(text: &mut String, code_text: &str) {
     }
 
     // a code span right before would merge its closing run with this
-    // opening one: `x` and `y` would give `x``y`, a single span; an escaped
-    // backtick is text and merges with nothing
-    if text
-        .strip_suffix('`')
-        .is_some_and(|rest| !ends_with_escape(rest))
-    {
+    // opening one: `x` and `y` would give `x``y`, a single span
+    if text.ends_with('`') {
         text.push(' ');
     }
 

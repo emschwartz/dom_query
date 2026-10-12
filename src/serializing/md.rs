@@ -1333,9 +1333,11 @@ fn main() {
     }
 
     #[test]
-    fn test_escaped_backtick_before_code_span() {
-        html_2md_compare("<p>a`<code>b</code></p>", "a\\``b`");
+    fn test_backtick_before_code_span() {
+        html_2md_compare("<p>a`<code>b</code></p>", "a\\` `b`");
         html_2md_compare("<p><code>a</code><code>b</code></p>", "`a` `b`");
+        // a span ending in a backslash still closes with a real backtick
+        html_2md_compare("<p><code>a\\</code><code>b</code></p>", "`a\\` `b`");
     }
 
     #[test]

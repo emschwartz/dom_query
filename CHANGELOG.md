@@ -13,7 +13,6 @@ All notable changes to the `dom_query` crate will be documented in this file.
 - **Markdown**: escape an ordered-list marker split across nodes (`<span>1</span>. text`), and stop escaping numbers longer than nine digits, which cannot be a marker.
 - **Markdown**: escape a `!` right before a link or image, so `Wow!<a>` no longer becomes image syntax.
 - **Markdown**: write nothing for a link whose text is only whitespace.
-- **Markdown**: write no space between a literal backtick and the code span that follows it.
 - **Markdown**: keep a link that wraps block elements on one line; a blank line inside `[...]` broke the link.
 - **Markdown**: treat an `<img>` without any source as absent when choosing a link's body, and skip leading commas in `srcset`.
 - **Markdown**: separate `<figcaption>`, `<dt>` and `<dd>` from adjacent content, and a list item's lead-in text from its first block child.

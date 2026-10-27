@@ -934,6 +934,15 @@ Another Paragraph";
     }
 
     #[test]
+    fn test_figcaption_and_definition_list_blocks() {
+        html_2md_compare(
+            r#"<figure><img src="http://e.com/a.jpg" alt="b"><figcaption>Caption</figcaption></figure><p>Next</p>"#,
+            "![b](http://e.com/a.jpg)\n\nCaption\n\nNext",
+        );
+        html_2md_compare("<dl><dt>Term</dt><dd>Def</dd></dl>", "Term\n\nDef");
+    }
+
+    #[test]
     fn test_linked_image() {
         // an image wrapped in a link must become the link body, not be dropped
         html_2md_compare(

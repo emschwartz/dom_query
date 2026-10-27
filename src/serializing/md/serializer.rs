@@ -225,6 +225,11 @@ pub(super) const fn is_md_block(name: &QualName) -> bool {
             | local_name!("ul")
             | local_name!("ol")
             | local_name!("dl")
+            // figcaption follows a block-level image inside `figure`;
+            // dt/dd are the block children of `dl`
+            | local_name!("figcaption")
+            | local_name!("dt")
+            | local_name!("dd")
             | local_name!("table")
             | local_name!("hr")
     )

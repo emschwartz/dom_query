@@ -35,13 +35,9 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         push_emphasis(text, &mut emphasis_text, "");
         return;
     }
-    // a run merged into the previous one follows what came before that marker
-    let before = if is_exact_marker_end(text, emphasis) {
-        &text[..text.len() - emphasis.len()]
-    } else {
-        text.as_str()
-    };
-    if can_use_marker(before, &emphasis_text, || is_safe_after(h, id, emphasis)) {
+    if can_use_marker(before_delimiters(text), &emphasis_text, || {
+        is_safe_after(h, id, emphasis)
+    }) {
         push_emphasis(text, &mut emphasis_text, emphasis);
     } else {
         push_html_emphasis(text, &emphasis_text, emphasis);
@@ -63,6 +59,18 @@ fn can_use_marker(before: &str, content: &str, safe_after: impl FnOnce() -> bool
         || before.chars().last().is_none_or(is_flanking_safe);
     let closes = last.is_alphanumeric() || content.ends_with(' ') || safe_after();
     opens && closes
+}
+
+/// `text` without its trailing `*` delimiters, which join a run written next:
+/// the character before them is the one the joined run is judged by.
+fn before_delimiters(text: &str) -> &str {
+    let stem = text.trim_end_matches('*');
+    if stem.len() == text.len() {
+        return text;
+    }
+    // an escaped `*` is text
+    let escaped = stem.bytes().rev().take_while(|&b| b == b'\\').count() % 2 != 0;
+    if escaped { &text[..=stem.len()] } else { stem }
 }
 
 /// Whitespace or punctuation; only common punctuation blocks are listed, so a

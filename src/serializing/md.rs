@@ -935,6 +935,16 @@ Another Paragraph";
             "<table><tr><th>h</th></tr><tr><td><ul><li>a<ul><li>b</li></ul></li></ul></td></tr></table>",
             "| h |\n| - |\n| + a<br>    + b |",
         );
+        // emphasis merging into the one before it rewrites the text before the part
+        html_2md_compare(
+            "<ul><li><b>a</b><b>bé</b><table></table></li></ul>",
+            "- **abé**",
+        );
+        // a nested list's indent starts the quote's buffer, and the item's write drains it
+        html_2md_compare(
+            "<table><tr><td><ul><li><blockquote><ul><li>é</li></ul></blockquote></li></ul></td></tr></table>",
+            "|   |\n| - |\n| + + é |",
+        );
     }
 
     #[test]

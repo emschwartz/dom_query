@@ -81,25 +81,48 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 }
 
 fn write_list_item<H: MDHost>(h: &H, text: &mut String, node_id: NodeId, ctx: &mut ListContext) {
-    let (item_start, block_indent) = write_item_marker(text, ctx);
+    let (item, block_indent) = write_item_marker(text, ctx);
     write_item_part(h, text, node_id, ctx.opts.list_item(), &block_indent);
-    pull_up_first_line(text, item_start - 1, &block_indent);
+    pull_up_first_line(text, item.start(text) - 1, &block_indent);
     text.push_str(ctx.linebreak());
+}
+
+/// Where an item's content starts in the buffer.
+#[derive(Clone, Copy)]
+struct ItemStart {
+    pos: usize,
+    /// The buffer's leading whitespace when the marker was written: a nested
+    /// `write` drains it, and with it a nested list's indent before the marker.
+    lead: usize,
+}
+
+impl ItemStart {
+    fn start(self, text: &str) -> usize {
+        self.pos - self.lead.saturating_sub(leading_ws_len(text))
+    }
+}
+
+fn leading_ws_len(text: &str) -> usize {
+    text.len() - text.trim_ascii_start().len()
 }
 
 /// Writes an item's marker and returns where its content starts and the column
 /// its continuation lines are indented to.
-fn write_item_marker(text: &mut String, ctx: &mut ListContext) -> (usize, String) {
+fn write_item_marker(text: &mut String, ctx: &mut ListContext) -> (ItemStart, String) {
     let prefix = ctx.prefix();
     // shift ol number after writing prefix
     ctx.advance_ol_number();
     let block_indent = " ".repeat(ctx.list_indent_len() + prefix.len());
     trim_trailing_space(text);
-    // a nested `write` trims the buffer's start, which would shift `item_start`
-    text.drain(..text.len() - text.trim_ascii_start().len());
+    // a nested `write` trims the buffer's start, which would shift the item's start
+    text.drain(..leading_ws_len(text));
     text.extend(std::iter::repeat_n(' ', ctx.list_indent_len()));
     text.push_str(&prefix);
-    (text.len(), block_indent)
+    let item = ItemStart {
+        pos: text.len(),
+        lead: leading_ws_len(text),
+    };
+    (item, block_indent)
 }
 
 fn write_list_item_blocks<H: MDHost>(
@@ -109,7 +132,7 @@ fn write_list_item_blocks<H: MDHost>(
     ctx: &mut ListContext,
 ) {
     let child_node = NodeRef::new(node_id, h.tree());
-    let (item_start, block_indent) = write_item_marker(text, ctx);
+    let (item, block_indent) = write_item_marker(text, ctx);
     // whether inline content is waiting for a block to be separated from
     let mut in_paragraph = false;
     // a code block or quote is followed by a blank line unless the item ends
@@ -138,14 +161,14 @@ fn write_list_item_blocks<H: MDHost>(
             if c.has_name("hr") {
                 if ctx.opts.table_cell {
                     // a cell has no line for a rule; keep the words on either side apart
-                    if text.len() > item_start {
+                    if text.len() > item.start(text) {
                         blank_line_due = true;
                     }
                     continue;
                 }
                 // own line: `- ---` would end the list, `---` under text makes a heading
                 text.truncate(text.trim_ascii_end().len());
-                let has_content = text.len() > item_start;
+                let has_content = text.len() > item.start(text);
                 text.push_str(ctx.linebreak());
                 if has_content {
                     text.push_str(ctx.linebreak());
@@ -173,12 +196,12 @@ fn write_list_item_blocks<H: MDHost>(
                     }
                 }
             }
-            if text.len() > item_start && (!indented || !in_paragraph) {
+            if text.len() > item.start(text) && (!indented || !in_paragraph) {
                 text.push_str(&block_indent);
             }
 
             if indented {
-                write_list_item_indented(h, text, &c, &block_indent, item_start, ctx);
+                write_list_item_indented(h, text, &c, &block_indent, item.start(text), ctx);
                 blank_line_due = true;
             } else {
                 let heading = c.qual_name_ref().filter(|n| is_heading(n));
@@ -205,7 +228,7 @@ fn write_list_item_blocks<H: MDHost>(
             }
         }
     }
-    pull_up_first_line(text, item_start - 1, &block_indent);
+    pull_up_first_line(text, item.start(text) - 1, &block_indent);
     if !text.ends_with('\n') {
         text.push_str(ctx.linebreak());
     }
@@ -251,6 +274,10 @@ fn write_list_item_indented<H: MDHost>(
     push_indented(text, block, ctx.linebreak(), block_indent, false);
 }
 
+/// How many chars before the end of the text a write can rewrite: the longest
+/// emphasis marker.
+const REWRITE_REACH: usize = "**".len();
+
 /// Writes a node of a list item. A line it starts at column zero would leave the
 /// item, so each is indented to `indent`; nested lists get an offset relative to it.
 fn write_item_part<H: MDHost>(
@@ -270,12 +297,36 @@ fn write_item_part<H: MDHost>(
     if text[..start].ends_with('\n') {
         text.truncate(start);
     }
+    // the write can rewrite the end of the text before it: trim whitespace, drop
+    // a closing emphasis marker to merge with it, escape a `!`. So the part starts
+    // where that tail stops matching, at a char boundary as only ASCII is rewritten.
+    let content = text[..start].trim_ascii_end();
+    let tail_start = content.len()
+        - content
+            .chars()
+            .rev()
+            .take(REWRITE_REACH)
+            .map(char::len_utf8)
+            .sum::<usize>();
+    // a nested list's marker drains the buffer's leading whitespace, as in `ItemStart`
+    let lead = leading_ws_len(text);
+    let tail_start = tail_start.max(lead).min(start);
+    let tail = text[tail_start..start].to_owned();
     h.write(
         text,
         id,
         opts.offset(opts.offset.saturating_sub(indent.len())),
     );
-    let start = start.min(text.len());
+    let tail_start = tail_start.saturating_sub(lead.saturating_sub(leading_ws_len(text)));
+    let kept = tail
+        .bytes()
+        .zip(text.as_bytes().get(tail_start..).unwrap_or_default())
+        .take_while(|(a, b)| a == *b)
+        .count();
+    let mut start = (tail_start + kept).min(text.len());
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
     let at_line_start = text[..start].ends_with('\n');
     // indent from the end, so the positions of earlier lines stay valid
     let mut line_end = text.len();

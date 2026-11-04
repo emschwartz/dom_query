@@ -229,6 +229,17 @@ mod tests {
     }
 
     #[test]
+    fn test_code_with_blocks() {
+        // blocks in inline code are joined with a space, not glued together
+        html_2md_compare("<code><p>a</p><ul><li>b</li></ul></code>", "`a b`");
+        html_2md_compare("<code>a<div>b</div>c</code>", "`a b c`");
+        // text's own spaces are not doubled, and nothing after the last block adds one
+        html_2md_compare("<code>a <div>b</div> c</code>", "`a b c`");
+        html_2md_compare("<code>a<p></p></code>", "`a`");
+        html_2md_compare("<code><div>a</div><span></span></code>", "`a`");
+    }
+
+    #[test]
     fn test_false_multiline_code() {
         let contents = r"<span>
         It`s like 

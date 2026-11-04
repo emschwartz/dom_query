@@ -99,6 +99,8 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
+        // code (md skipped) joins its blocks with a space, written before the next text
+        let mut block_space = false;
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
         } else {
@@ -113,6 +115,7 @@ impl MDHost for MDSerializer<'_> {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => {
+                            push_due_space(text, &mut block_space, contents);
                             push_normalized_text(text, contents, opts);
                         }
                         NodeData::Element(e) => {
@@ -120,7 +123,7 @@ impl MDHost for MDSerializer<'_> {
                                 continue;
                             }
 
-                            // linebreaks are disabled for md blocks if md is skipped (for code);
+                            block_space |= opts.skip_md && is_link_block(&e.name);
                             // a table cell joins its blocks with `<br>`
                             if !opts.skip_md {
                                 if opts.link_body {
@@ -195,6 +198,8 @@ impl MDHost for MDSerializer<'_> {
                             // a table written as text keeps its cells apart
                             push_block_space(text);
                         }
+                    } else if is_link_block(name) {
+                        block_space = true;
                     } else if name.local == local_name!("br") && !text.ends_with(' ') {
                         // normalize `<br>` as a space when Markdown output is disabled
                         text.push(' ');
@@ -206,6 +211,13 @@ impl MDHost for MDSerializer<'_> {
         if !opts.include_node && !opts.link_body {
             trim_space(text);
         }
+    }
+}
+
+/// Writes a space that is `due` before `next`, unless `next` starts with whitespace of its own.
+fn push_due_space(text: &mut String, due: &mut bool, next: &str) {
+    if std::mem::take(due) && !next.starts_with(|c: char| c.is_ascii_whitespace()) {
+        push_block_space(text);
     }
 }
 

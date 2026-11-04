@@ -68,6 +68,31 @@ impl<'a> MDSerializer<'a> {
     }
 }
 
+/// A word boundary written as a space only before the next text that starts a word;
+/// one still pending when the write ends is dropped.
+#[derive(Default)]
+pub(super) struct PendingSpace(bool);
+
+impl PendingSpace {
+    /// Marks a boundary at `name`: a block in code (md skipped).
+    fn mark_at(&mut self, name: &QualName, opts: FormatOpts) {
+        self.0 |= opts.skip_md && is_link_block(name);
+    }
+
+    /// Text starting with whitespace brings its own space; closing punctuation takes none.
+    pub(super) fn flush(&mut self, text: &mut String, next: &str) {
+        if next.is_empty() || !std::mem::take(&mut self.0) {
+            return;
+        }
+        let takes_no_space = |c: char| {
+            c.is_whitespace() || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
+        };
+        if !next.starts_with(takes_no_space) {
+            push_block_space(text);
+        }
+    }
+}
+
 impl MDHost for MDSerializer<'_> {
     fn tree(&self) -> &Tree {
         self.root_node.tree
@@ -99,6 +124,8 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
+        // code (md skipped) joins its blocks with a space
+        let mut block_space = PendingSpace::default();
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
         } else {
@@ -113,6 +140,7 @@ impl MDHost for MDSerializer<'_> {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => {
+                            block_space.flush(text, contents);
                             push_normalized_text(text, contents, opts);
                         }
                         NodeData::Element(e) => {
@@ -120,8 +148,9 @@ impl MDHost for MDSerializer<'_> {
                                 continue;
                             }
 
-                            // linebreaks are disabled for md blocks if md is skipped (for code);
+                            // code (md skipped) joins its blocks with a space instead of linebreaks;
                             // a table cell joins its blocks with `<br>`
+                            block_space.mark_at(&e.name, opts);
                             if !opts.skip_md {
                                 if opts.link_body {
                                     if is_link_block(&e.name) {
@@ -142,9 +171,7 @@ impl MDHost for MDSerializer<'_> {
                                 }
                                 // push md prefixes only when md mode is active
                                 if !opts.link_body {
-                                    if let Some(prefix) = md_prefix(&e.name) {
-                                        text.push_str(prefix);
-                                    }
+                                    text.push_str(md_prefix(&e.name).unwrap_or_default());
                                 }
                                 // delegate serialization if the element has its own custom handler
                                 if self.write_element(text, e, id, opts) {
@@ -161,6 +188,7 @@ impl MDHost for MDSerializer<'_> {
                     }
                 }
                 SerializeOp::Close(name) => {
+                    block_space.mark_at(name, opts);
                     if text.ends_with(double_br) {
                         continue;
                     }

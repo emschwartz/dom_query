@@ -1,6 +1,6 @@
 use std::cell::{Cell, Ref};
 
-use html5ever::{QualName, local_name};
+use html5ever::{QualName, local_name, ns};
 use tendril::StrTendril;
 
 use crate::{Element, NodeId, Tree};
@@ -24,18 +24,21 @@ pub struct MDSerializer<'a> {
     pub(super) root_node: &'a NodeRef<'a>,
     pub(super) nodes: Ref<'a, Vec<TreeNode>>,
     pub(super) skip_tags: &'a [&'a str],
+    skip_svg_text: bool,
     last_list: Cell<Option<(NodeId, bool)>>,
     depth: Cell<usize>,
 }
 
 impl<'a> MDSerializer<'a> {
     pub fn new(root_node: &'a NodeRef, skip_tags: Option<&'a [&'a str]>) -> Self {
+        let skip_svg_text = skip_tags.is_none();
         let skip_tags = skip_tags.unwrap_or(&DEFAULT_SKIP_TAGS);
         let nodes = root_node.tree.nodes.borrow();
         MDSerializer {
             root_node,
             nodes,
             skip_tags,
+            skip_svg_text,
             last_list: Cell::new(None),
             depth: Cell::new(0),
         }
@@ -79,6 +82,10 @@ impl MDHost for MDSerializer<'_> {
 
     fn is_skipped(&self, name: &QualName) -> bool {
         self.skip_tags.contains(&name.local.as_ref())
+            // an SVG `<title>` or `<desc>` is a tooltip or description, never shown as text
+            || (self.skip_svg_text
+                && name.ns == ns!(svg)
+                && matches!(name.local, local_name!("title") | local_name!("desc")))
     }
 
     /// The last list written and whether the next same-type list must use the

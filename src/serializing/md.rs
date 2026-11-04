@@ -2242,6 +2242,20 @@ R 2, *C 1* R 2, *C 2*";
     }
 
     #[test]
+    fn test_skip_svg_text() {
+        // an SVG title or description is never shown; an html `<title>` in the body is kept
+        html_2md_compare(
+            "<p>a<svg><title>Icon</title><desc>d</desc></svg>b</p>",
+            "ab",
+        );
+        html_2md_compare("<p>a<title>t</title>b</p>", "atb");
+        // `Some(&[])` processes all elements
+        let doc = Document::from("<p>a<svg><title>Icon</title></svg>b</p>");
+        let md_text = serialize_md(&doc.root(), false, Some(&[]));
+        assert_eq!(md_text.as_ref(), "aIconb");
+    }
+
+    #[test]
     fn test_text_after_list() {
         // on the next line the text would continue the last item
         html_2md_compare("<ul><li>a</li></ul>b", "- a\n\nb");

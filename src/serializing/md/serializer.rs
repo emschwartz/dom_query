@@ -7,7 +7,7 @@ use crate::{Element, NodeId, Tree};
 
 use crate::node::{NodeData, NodeRef, SerializeOp, TreeNode, child_nodes};
 
-use super::block::{is_link_block, is_list, is_md_block};
+use super::block::{is_link_block, is_list, is_md_block, is_spaced_inline};
 use super::constants::{DEFAULT_SKIP_TAGS, MAX_NESTING};
 use super::ctx::FormatOpts;
 use super::elements;
@@ -123,7 +123,9 @@ impl MDHost for MDSerializer<'_> {
                             // linebreaks are disabled for md blocks if md is skipped (for code);
                             // a table cell joins its blocks with `<br>`
                             if !opts.skip_md {
-                                if opts.link_body {
+                                if is_spaced_inline(&e.name) {
+                                    push_block_space(text);
+                                } else if opts.link_body {
                                     if is_link_block(&e.name) {
                                         push_block_space(text);
                                     }
@@ -165,8 +167,10 @@ impl MDHost for MDSerializer<'_> {
                         continue;
                     }
 
-                    if opts.link_body && is_link_block(name) {
-                        // no joining space when nothing follows in the link body
+                    if (opts.link_body && is_link_block(name))
+                        || (!opts.skip_md && is_spaced_inline(name))
+                    {
+                        // no joining space when nothing follows
                         if ops
                             .iter()
                             .rev()

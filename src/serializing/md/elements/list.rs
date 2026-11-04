@@ -95,8 +95,17 @@ fn write_item_marker(text: &mut String, ctx: &mut ListContext) -> (usize, usize)
     text.drain(..text.len() - text.trim_ascii_start().len());
     // an indent at the start of an empty buffer would be trimmed the same way
     if !text.is_empty() {
+        // text directly in the list would run into the marker; a blank line keeps an
+        // empty first item from underlining it as a setext heading
+        if !text.ends_with(ctx.linebreak()) {
+            text.push_str(ctx.linebreak());
+            if !ctx.started && !ctx.opts.table_cell {
+                text.push_str(ctx.linebreak());
+            }
+        }
         text.extend(std::iter::repeat_n(' ', ctx.list_indent_len()));
     }
+    ctx.started = true;
     text.push_str(&prefix);
     (text.len(), block_indent)
 }

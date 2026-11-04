@@ -120,8 +120,11 @@ impl MDHost for MDSerializer<'_> {
                                 continue;
                             }
 
-                            // linebreaks are disabled for md blocks if md is skipped (for code);
+                            // code (md skipped) joins its blocks with a space, as a link label does;
                             // a table cell joins its blocks with `<br>`
+                            if opts.skip_md && is_link_block(&e.name) {
+                                push_block_space(text);
+                            }
                             if !opts.skip_md {
                                 if opts.link_body {
                                     if is_link_block(&e.name) {
@@ -165,7 +168,7 @@ impl MDHost for MDSerializer<'_> {
                         continue;
                     }
 
-                    if opts.link_body && is_link_block(name) {
+                    if (opts.link_body || opts.skip_md) && is_link_block(name) {
                         // no joining space when nothing follows in the link body
                         if ops
                             .iter()

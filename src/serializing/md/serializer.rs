@@ -1,11 +1,11 @@
-use std::cell::{Cell, Ref};
+use std::cell::{Cell, Ref, RefCell};
 
 use html5ever::{QualName, local_name};
 use tendril::StrTendril;
 
 use crate::{Element, NodeId, Tree};
 
-use crate::node::{NodeData, NodeRef, SerializeOp, TreeNode, child_nodes};
+use crate::node::{NodeData, NodeRef, TreeNode, child_nodes};
 
 use super::block::{is_link_block, is_list, is_md_block};
 use super::constants::{DEFAULT_SKIP_TAGS, MAX_NESTING};
@@ -20,12 +20,22 @@ use super::text_utils::{
     trim_space, trim_trailing_space,
 };
 
+#[derive(Clone, Copy)]
+enum Op {
+    Open(NodeId),
+    Close(NodeId),
+}
+
 pub struct MDSerializer<'a> {
     pub(super) root_node: &'a NodeRef<'a>,
     pub(super) nodes: Ref<'a, Vec<TreeNode>>,
     pub(super) skip_tags: &'a [&'a str],
     last_list: Cell<Option<(NodeId, bool)>>,
     depth: Cell<usize>,
+    // one per nested `write`, reused so each doesn't allocate its own stack
+    op_stacks: RefCell<Vec<Vec<Op>>>,
+    // at most one per nesting level, freed with the serializer
+    bufs: RefCell<Vec<String>>,
 }
 
 impl<'a> MDSerializer<'a> {
@@ -38,6 +48,8 @@ impl<'a> MDSerializer<'a> {
             skip_tags,
             last_list: Cell::new(None),
             depth: Cell::new(0),
+            op_stacks: RefCell::default(),
+            bufs: RefCell::default(),
         }
     }
 
@@ -69,6 +81,15 @@ impl<'a> MDSerializer<'a> {
 }
 
 impl MDHost for MDSerializer<'_> {
+    fn take_buf(&self) -> String {
+        self.bufs.borrow_mut().pop().unwrap_or_default()
+    }
+
+    fn put_buf(&self, mut buf: String) {
+        buf.clear();
+        self.bufs.borrow_mut().push(buf);
+    }
+
     fn tree(&self) -> &Tree {
         self.root_node.tree
     }
@@ -99,17 +120,16 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
-        let mut ops = if opts.include_node {
-            vec![SerializeOp::Open(root_id)]
+        let mut ops = self.op_stacks.borrow_mut().pop().unwrap_or_default();
+        if opts.include_node {
+            ops.push(Op::Open(root_id));
         } else {
-            child_nodes(Ref::clone(&self.nodes), &root_id, true)
-                .map(SerializeOp::Open)
-                .collect()
-        };
+            ops.extend(child_nodes(Ref::clone(&self.nodes), &root_id, true).map(Op::Open));
+        }
 
         while let Some(op) = ops.pop() {
             match op {
-                SerializeOp::Open(id) => {
+                Op::Open(id) => {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => {
@@ -151,27 +171,26 @@ impl MDHost for MDSerializer<'_> {
                                     continue;
                                 }
                             }
-                            ops.push(SerializeOp::Close(&e.name));
+                            ops.push(Op::Close(id));
                             ops.extend(
-                                child_nodes(Ref::clone(&self.nodes), &id, true)
-                                    .map(SerializeOp::Open),
+                                child_nodes(Ref::clone(&self.nodes), &id, true).map(Op::Open),
                             );
                         }
                         _ => {}
                     }
                 }
-                SerializeOp::Close(name) => {
+                Op::Close(id) => {
                     if text.ends_with(double_br) {
                         continue;
                     }
+                    let NodeData::Element(Element { name, .. }) = &self.nodes[id.value()].data
+                    else {
+                        continue;
+                    };
 
                     if opts.link_body && is_link_block(name) {
                         // no joining space when nothing follows in the link body
-                        if ops
-                            .iter()
-                            .rev()
-                            .any(|op| matches!(op, SerializeOp::Open(_)))
-                        {
+                        if ops.iter().rev().any(|op| matches!(op, Op::Open(_))) {
                             push_block_space(text);
                         }
                     } else if !opts.skip_md {
@@ -202,6 +221,8 @@ impl MDHost for MDSerializer<'_> {
                 }
             }
         }
+
+        self.op_stacks.borrow_mut().push(ops);
 
         if !opts.include_node && !opts.link_body {
             trim_space(text);

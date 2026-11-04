@@ -68,6 +68,36 @@ impl<'a> MDSerializer<'a> {
     }
 }
 
+/// A word boundary written as a space only before the next text that starts a word;
+/// one still pending when the write ends is dropped.
+#[derive(Default)]
+pub(super) struct PendingSpace(bool);
+
+impl PendingSpace {
+    /// Marks a pending space if `boundary` holds.
+    pub(super) fn mark(&mut self, boundary: bool) {
+        self.0 |= boundary;
+    }
+
+    /// Text starting with whitespace brings its own space; closing punctuation takes none.
+    pub(super) fn flush(&mut self, text: &mut String, next: &str) {
+        if next.is_empty() || !std::mem::take(&mut self.0) {
+            return;
+        }
+        let takes_no_space = |c: char| {
+            c.is_ascii_whitespace()
+                || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
+                || matches!(
+                    c,
+                    '。' | '，' | '、' | '；' | '：' | '！' | '？' | '）' | '」' | '』'
+                )
+        };
+        if !next.starts_with(takes_no_space) {
+            push_block_space(text);
+        }
+    }
+}
+
 impl MDHost for MDSerializer<'_> {
     fn tree(&self) -> &Tree {
         self.root_node.tree
@@ -99,6 +129,8 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
+        // code (md skipped) joins its blocks with a space
+        let mut block_space = PendingSpace::default();
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
         } else {
@@ -113,6 +145,7 @@ impl MDHost for MDSerializer<'_> {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => {
+                            block_space.flush(text, contents);
                             push_normalized_text(text, contents, opts);
                         }
                         NodeData::Element(e) => {
@@ -120,7 +153,7 @@ impl MDHost for MDSerializer<'_> {
                                 continue;
                             }
 
-                            // linebreaks are disabled for md blocks if md is skipped (for code);
+                            block_space.mark(opts.skip_md && is_link_block(&e.name));
                             // a table cell joins its blocks with `<br>`
                             if !opts.skip_md {
                                 if opts.link_body {
@@ -195,6 +228,8 @@ impl MDHost for MDSerializer<'_> {
                             // a table written as text keeps its cells apart
                             push_block_space(text);
                         }
+                    } else if is_link_block(name) {
+                        block_space.mark(true);
                     } else if name.local == local_name!("br") && !text.ends_with(' ') {
                         // normalize `<br>` as a space when Markdown output is disabled
                         text.push(' ');

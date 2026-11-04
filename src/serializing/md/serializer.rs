@@ -26,6 +26,8 @@ pub struct MDSerializer<'a> {
     pub(super) skip_tags: &'a [&'a str],
     last_list: Cell<Option<(NodeId, bool)>>,
     depth: Cell<usize>,
+    /// A word boundary left at the end of a write, for the write that follows it.
+    word_space: Cell<bool>,
 }
 
 impl<'a> MDSerializer<'a> {
@@ -38,6 +40,7 @@ impl<'a> MDSerializer<'a> {
             skip_tags,
             last_list: Cell::new(None),
             depth: Cell::new(0),
+            word_space: Cell::new(false),
         }
     }
 
@@ -82,17 +85,17 @@ impl<'a> MDSerializer<'a> {
             text.truncate(at);
             space.0 = spaced;
         }
+        space.0 |= self.word_space.take();
         handled
     }
 }
 
 /// A word boundary written as a space only before the next text that starts a word;
-/// one still pending when the write ends is dropped.
-#[derive(Default)]
+/// one still pending when a code write ends is dropped, otherwise the next write gets it.
 pub(super) struct PendingSpace(bool);
 
 impl PendingSpace {
-    /// Marks a boundary at `name`: a block in code (md skipped), an option elsewhere.
+    /// Marks a boundary at `name`: a block in code (md skipped), an option or svg elsewhere.
     fn mark_at(&mut self, name: &QualName, opts: FormatOpts) {
         self.0 |= if opts.skip_md {
             is_link_block(name)
@@ -101,7 +104,8 @@ impl PendingSpace {
         };
     }
 
-    /// Text starting with whitespace brings its own space; closing punctuation takes none.
+    /// Text starting with whitespace brings its own space; closing punctuation takes none,
+    /// nor does text after an opening bracket or between two CJK characters.
     pub(super) fn flush(&mut self, text: &mut String, next: &str) {
         if next.is_empty() || !std::mem::take(&mut self.0) {
             return;
@@ -109,9 +113,15 @@ impl PendingSpace {
         let takes_no_space = |c: char| {
             c.is_whitespace() || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
         };
-        if !next.starts_with(takes_no_space) {
-            push_block_space(text);
+        let opening = |c: char| c.is_whitespace() || matches!(c, '(' | '[' | '{');
+        let cjk = |c: char| matches!(c, '\u{3000}'..='\u{30ff}' | '\u{3400}'..='\u{9fff}');
+        if next.starts_with(takes_no_space)
+            || text.ends_with(opening)
+            || (text.ends_with(cjk) && next.starts_with(cjk))
+        {
+            return;
         }
+        push_block_space(text);
     }
 }
 
@@ -146,8 +156,8 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
-        // code (md skipped) joins its blocks with a space; an option is written apart
-        let mut block_space = PendingSpace::default();
+        // code (md skipped) joins its blocks with a space; an option or svg is written apart
+        let mut block_space = PendingSpace(self.word_space.take());
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
         } else {
@@ -258,6 +268,7 @@ impl MDHost for MDSerializer<'_> {
         if !opts.include_node && !opts.link_body {
             trim_space(text);
         }
+        self.word_space.set(!opts.skip_md && block_space.0);
     }
 }
 

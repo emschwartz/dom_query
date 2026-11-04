@@ -1992,6 +1992,15 @@ R 2, *C 1* R 2, *C 2*";
     }
 
     #[test]
+    fn test_select_options() {
+        // options stay apart from each other and from the text around the `<select>`
+        html_2md_compare(
+            "<p>Sort:<select><option>One</option><option>Two</option></select>now</p>",
+            "Sort: One Two now",
+        );
+    }
+
+    #[test]
     fn test_table_empty() {
         let contents = "<table>
     <tr></tr>

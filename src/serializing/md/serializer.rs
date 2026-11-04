@@ -123,7 +123,10 @@ impl MDHost for MDSerializer<'_> {
                             // linebreaks are disabled for md blocks if md is skipped (for code);
                             // a table cell joins its blocks with `<br>`
                             if !opts.skip_md {
-                                if opts.link_body {
+                                if e.name.local == local_name!("option") {
+                                    // a `<select>` option is written apart from the text before it
+                                    push_block_space(text);
+                                } else if opts.link_body {
                                     if is_link_block(&e.name) {
                                         push_block_space(text);
                                     }
@@ -191,8 +194,11 @@ impl MDHost for MDSerializer<'_> {
                                 text.push_str("  ");
                                 text.push_str(linebreak);
                             }
-                        } else if matches!(name.local, local_name!("td") | local_name!("th")) {
-                            // a table written as text keeps its cells apart
+                        } else if matches!(
+                            name.local,
+                            local_name!("td") | local_name!("th") | local_name!("option")
+                        ) {
+                            // a table written as text keeps its cells apart, a `<select>` its options
                             push_block_space(text);
                         }
                     } else if name.local == local_name!("br") && !text.ends_with(' ') {

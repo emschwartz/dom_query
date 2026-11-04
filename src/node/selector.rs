@@ -7,8 +7,11 @@ use selectors::context::MatchingContext;
 use selectors::matching::ElementSelectorFlags;
 use selectors::parser::SelectorImpl;
 
-use super::NodeRef;
-use super::node_data::NodeData;
+use std::fmt;
+
+use super::node_data::{Element, NodeData};
+use super::{NodeId, NodeRef, TreeNode};
+use crate::TreeNodeOps;
 use crate::css::CssLocalName;
 use crate::matcher::{InnerSelector, NonTSPseudoClass};
 
@@ -218,6 +221,204 @@ impl selectors::Element for NodeRef<'_> {
     /// Returns the first element child. Skips non-element nodes.
     fn first_element_child(&self) -> Option<Self> {
         self.first_element_child()
+    }
+
+    fn apply_selector_flags(&self, _flags: ElementSelectorFlags) {}
+}
+
+/// An element matched through a tree borrow held by the caller, so trait calls skip `RefCell::borrow`.
+#[derive(Clone, Copy)]
+pub(crate) struct BorrowedElement<'a> {
+    pub(crate) nodes: &'a [TreeNode],
+    pub(crate) node: NodeRef<'a>,
+}
+
+impl fmt::Debug for BorrowedElement<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.node.fmt(f)
+    }
+}
+
+impl<'a> BorrowedElement<'a> {
+    #[inline]
+    fn tree_node(&self) -> Option<&'a TreeNode> {
+        self.nodes.get(self.node.id.value())
+    }
+
+    #[inline]
+    fn element(&self) -> Option<&'a Element> {
+        self.tree_node().and_then(|n| n.as_element())
+    }
+
+    #[inline]
+    fn with_id(&self, id: Option<NodeId>) -> Option<Self> {
+        id.map(|id| Self {
+            nodes: self.nodes,
+            node: NodeRef::new(id, self.node.tree),
+        })
+    }
+}
+
+impl selectors::Element for BorrowedElement<'_> {
+    type Impl = InnerSelector;
+
+    fn add_element_unique_hashes(&self, _filter: &mut selectors::bloom::BloomFilter) -> bool {
+        false
+    }
+
+    fn has_custom_state(&self, _name: &<Self::Impl as SelectorImpl>::Identifier) -> bool {
+        false
+    }
+
+    #[inline]
+    fn opaque(&self) -> OpaqueElement {
+        OpaqueElement::new(self.tree_node().expect("element not in the tree!"))
+    }
+
+    #[inline]
+    fn parent_element(&self) -> Option<Self> {
+        self.with_id(self.tree_node().and_then(|n| n.parent))
+    }
+
+    #[inline]
+    fn parent_node_is_shadow_root(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    fn containing_shadow_host(&self) -> Option<Self> {
+        None
+    }
+
+    #[inline]
+    fn is_pseudo_element(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    fn prev_sibling_element(&self) -> Option<Self> {
+        self.with_id(TreeNodeOps::prev_element_sibling_of(
+            self.nodes,
+            &self.node.id,
+        ))
+    }
+
+    #[inline]
+    fn next_sibling_element(&self) -> Option<Self> {
+        self.with_id(TreeNodeOps::next_element_sibling_of(
+            self.nodes,
+            &self.node.id,
+        ))
+    }
+
+    #[inline]
+    fn is_html_element_in_html_document(&self) -> bool {
+        self.element().is_some_and(|e| e.name.ns == ns!(html))
+    }
+
+    #[inline]
+    fn has_local_name(&self, local_name: &<Self::Impl as SelectorImpl>::BorrowedLocalName) -> bool {
+        self.element().is_some_and(|e| e.name.local == **local_name)
+    }
+
+    #[inline]
+    fn has_namespace(&self, ns: &<Self::Impl as SelectorImpl>::BorrowedNamespaceUrl) -> bool {
+        self.element().is_some_and(|e| &e.name.ns == ns)
+    }
+
+    fn is_same_type(&self, other: &Self) -> bool {
+        match (self.element(), other.element()) {
+            (Some(e1), Some(e2)) => e1.name == e2.name,
+            _ => false,
+        }
+    }
+
+    fn attr_matches(
+        &self,
+        ns: &NamespaceConstraint<&<Self::Impl as SelectorImpl>::NamespaceUrl>,
+        local_name: &<Self::Impl as SelectorImpl>::LocalName,
+        operation: &AttrSelectorOperation<&<Self::Impl as SelectorImpl>::AttrValue>,
+    ) -> bool {
+        self.element().is_some_and(|e| {
+            e.attrs.iter().any(|attr| match *ns {
+                NamespaceConstraint::Specific(url) if *url != attr.name.ns => false,
+                _ => local_name.0 == attr.name.local && operation.eval_str(&attr.value),
+            })
+        })
+    }
+
+    fn match_non_ts_pseudo_class(
+        &self,
+        pseudo: &<Self::Impl as SelectorImpl>::NonTSPseudoClass,
+        context: &mut MatchingContext<Self::Impl>,
+    ) -> bool {
+        match pseudo {
+            NonTSPseudoClass::AnyLink | NonTSPseudoClass::Link => {
+                self.tree_node().is_some_and(|n| n.is_link())
+            }
+            _ => self.node.match_non_ts_pseudo_class(pseudo, context),
+        }
+    }
+
+    fn match_pseudo_element(
+        &self,
+        _pe: &<Self::Impl as SelectorImpl>::PseudoElement,
+        _context: &mut MatchingContext<Self::Impl>,
+    ) -> bool {
+        false
+    }
+
+    fn is_link(&self) -> bool {
+        false
+    }
+
+    fn is_html_slot_element(&self) -> bool {
+        true
+    }
+
+    fn has_id(
+        &self,
+        name: &<Self::Impl as SelectorImpl>::Identifier,
+        case_sensitivity: CaseSensitivity,
+    ) -> bool {
+        self.element().is_some_and(|e| {
+            e.attrs.iter().any(|attr| {
+                attr.name.local == local_name!("id")
+                    && case_sensitivity.eq(name.as_bytes(), attr.value.as_bytes())
+            })
+        })
+    }
+
+    fn has_class(
+        &self,
+        name: &<Self::Impl as SelectorImpl>::LocalName,
+        case_sensitivity: CaseSensitivity,
+    ) -> bool {
+        self.element()
+            .is_some_and(|e| e.has_class_bytes(name.as_bytes(), case_sensitivity))
+    }
+
+    fn imported_part(&self, _name: &CssLocalName) -> Option<CssLocalName> {
+        None
+    }
+
+    fn is_part(&self, _name: &CssLocalName) -> bool {
+        false
+    }
+
+    fn is_empty(&self) -> bool {
+        self.node.is_empty_element()
+    }
+
+    fn is_root(&self) -> bool {
+        self.tree_node().is_some_and(|n| n.is_document())
+    }
+
+    fn first_element_child(&self) -> Option<Self> {
+        self.with_id(TreeNodeOps::first_element_child_of(
+            self.nodes,
+            &self.node.id,
+        ))
     }
 
     fn apply_selector_flags(&self, _flags: ElementSelectorFlags) {}

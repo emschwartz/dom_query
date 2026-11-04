@@ -18,6 +18,7 @@ pub use iters::{
 pub use node_data::{Element, NodeData};
 pub(crate) use node_ref::table_context_name;
 pub use node_ref::{Node, NodeRef};
+pub(crate) use selector::BorrowedElement;
 pub use serializing::SerializableNodeRef;
 pub(crate) use serializing::SerializeOp;
 pub(crate) use text_formatting::format_text;

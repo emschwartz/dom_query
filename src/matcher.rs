@@ -9,7 +9,7 @@ use selectors::{Element, context, matching};
 
 use crate::Tree;
 use crate::css::{CssLocalName, CssString};
-use crate::node::{DescendantNodes, NodeData, NodeRef, TreeNode};
+use crate::node::{BorrowedElement, DescendantNodes, NodeData, NodeRef, TreeNode};
 /// CSS selector.
 #[derive(Clone, Debug)]
 pub struct Matcher {
@@ -123,10 +123,14 @@ impl<'a> Iterator for DescendantMatches<'a, '_> {
             };
             let node = NodeRef::new(node_id, self.tree);
             let matched = self.matcher.match_tree_node(tree_node).unwrap_or_else(|| {
+                let element = BorrowedElement {
+                    nodes: self.iter.nodes(),
+                    node,
+                };
                 tree_node.is_element()
                     && self
                         .matcher
-                        .match_element_with_caches(&node, &mut self.caches)
+                        .match_element_with_caches(&element, &mut self.caches)
             });
             if matched {
                 return Some(node);

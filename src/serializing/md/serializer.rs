@@ -51,7 +51,14 @@ impl<'a> MDSerializer<'a> {
         text.into()
     }
 
-    fn write_element(&self, text: &mut String, e: &Element, id: NodeId, opts: FormatOpts) -> bool {
+    fn write_element(
+        &self,
+        text: &mut String,
+        e: &Element,
+        id: NodeId,
+        opts: FormatOpts,
+        space: &mut PendingSpace,
+    ) -> bool {
         let depth = self.depth.get();
         // these handlers never dispatch to other handlers, so they add one frame at most
         let leaf = matches!(
@@ -62,8 +69,19 @@ impl<'a> MDSerializer<'a> {
             return false;
         }
         self.depth.set(depth + 1);
+        let at = text.len();
+        let spaced = std::mem::take(&mut space.0);
+        if spaced {
+            push_block_space(text);
+        }
+        let start = text.len();
         let handled = elements::write_element(self, text, e, id, opts);
         self.depth.set(depth);
+        // an element that writes nothing leaves the space pending
+        if text.len() == start {
+            text.truncate(at);
+            space.0 = spaced;
+        }
         handled
     }
 }
@@ -74,8 +92,13 @@ impl<'a> MDSerializer<'a> {
 pub(super) struct PendingSpace(bool);
 
 impl PendingSpace {
-    pub(super) fn mark(&mut self) {
-        self.0 = true;
+    /// Marks a boundary at `name`: a block in code (md skipped), an option elsewhere.
+    fn mark_at(&mut self, name: &QualName, opts: FormatOpts) {
+        self.0 |= if opts.skip_md {
+            is_link_block(name)
+        } else {
+            is_spaced_inline(name)
+        };
     }
 
     /// Text starting with whitespace brings its own space; closing punctuation takes none.
@@ -123,7 +146,7 @@ impl MDHost for MDSerializer<'_> {
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
-        // code (md skipped) joins its blocks with a space
+        // code (md skipped) joins its blocks with a space; an option is written apart
         let mut block_space = PendingSpace::default();
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
@@ -149,10 +172,9 @@ impl MDHost for MDSerializer<'_> {
 
                             // code (md skipped) joins its blocks with a space instead of linebreaks;
                             // a table cell joins its blocks with `<br>`
+                            block_space.mark_at(&e.name, opts);
                             if !opts.skip_md {
-                                if is_spaced_inline(&e.name) {
-                                    push_block_space(text);
-                                } else if opts.link_body {
+                                if opts.link_body {
                                     if is_link_block(&e.name) {
                                         push_block_space(text);
                                     }
@@ -176,11 +198,9 @@ impl MDHost for MDSerializer<'_> {
                                     }
                                 }
                                 // delegate serialization if the element has its own custom handler
-                                if self.write_element(text, e, id, opts) {
+                                if self.write_element(text, e, id, opts, &mut block_space) {
                                     continue;
                                 }
-                            } else if is_link_block(&e.name) {
-                                block_space.mark();
                             }
                             ops.push(SerializeOp::Close(&e.name));
                             ops.extend(
@@ -196,10 +216,9 @@ impl MDHost for MDSerializer<'_> {
                         continue;
                     }
 
-                    if (opts.link_body && is_link_block(name))
-                        || (!opts.skip_md && is_spaced_inline(name))
-                    {
-                        // no joining space when nothing follows
+                    block_space.mark_at(name, opts);
+                    if opts.link_body && is_link_block(name) {
+                        // no joining space when nothing follows in the link body
                         if ops
                             .iter()
                             .rev()
@@ -228,8 +247,6 @@ impl MDHost for MDSerializer<'_> {
                             // a table written as text keeps its cells apart
                             push_block_space(text);
                         }
-                    } else if is_link_block(name) {
-                        block_space.mark();
                     } else if name.local == local_name!("br") && !text.ends_with(' ') {
                         // normalize `<br>` as a space when Markdown output is disabled
                         text.push(' ');

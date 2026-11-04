@@ -2025,6 +2025,32 @@ R 2, *C 1* R 2, *C 2*";
             "<table><tr><th>h</th></tr><tr><td><select><option>a</option><option>b</option></select></td></tr></table>",
             "| h |\n| - |\n| a b |",
         );
+        // the space goes only before a following word, not before punctuation or nothing
+        html_2md_compare(
+            "<p>Pick a <select><option>size</option></select>.</p>",
+            "Pick a size.",
+        );
+        html_2md_compare(
+            "<a href=\"/u\">go<select><option>a</option></select><!-- c --></a>",
+            "[go a](/u)",
+        );
+        // an element written by its own handler gets the space too
+        html_2md_compare(
+            "<p>a<select><option>x</option></select><b>b</b>c</p>",
+            "a x **b**c",
+        );
+        html_2md_compare(
+            "<p>a<select><option>x</option></select><b></b>c</p>",
+            "a x c",
+        );
+        html_2md_compare(
+            "<p>a <select><option></option></select><b>b</b></p>",
+            "a **b**",
+        );
+        html_2md_compare(
+            "<a href=\"/u\"><select><option></option></select><b>x</b></a>",
+            "[**x**](/u)",
+        );
     }
 
     #[test]

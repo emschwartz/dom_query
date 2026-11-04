@@ -2010,6 +2010,18 @@ R 2, *C 1* R 2, *C 2*";
     }
 
     #[test]
+    fn test_svg_apart() {
+        // an `<svg>` keeps its title text, apart from the words around it
+        html_2md_compare("<p>a<svg><title>Icon</title></svg>b</p>", "a Icon b");
+        html_2md_compare("<p>a<svg><path d=\"M0 0\"></path></svg>b</p>", "a b");
+        // an icon-only link keeps its name, with no space inside the label
+        html_2md_compare(
+            "<p>See <a href=\"/home\"><svg><title>Home</title></svg></a> now</p>",
+            "See [Home](/home) now",
+        );
+    }
+
+    #[test]
     fn test_table_empty() {
         let contents = "<table>
     <tr></tr>

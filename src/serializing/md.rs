@@ -528,6 +528,19 @@ $ cd hello
     }
 
     #[test]
+    fn test_list_stray_text() {
+        // text directly in a list ends its line before the next item's marker
+        html_2md_compare("<ul>Partei<li>a</li></ul>", "Partei\n- a");
+        html_2md_compare("<ol><li>a</li><b>x</b><li>b</li></ol>", "1. a\n**x**\n2. b");
+        html_2md_compare(
+            "<ul><li>a<ul>Q<li>b</li></ul></li></ul>",
+            "- a\n  Q\n    - b",
+        );
+        let contents = "<table><tr><th>h</th></tr><tr><td><ul>P<li>a</li></ul></td></tr></table>";
+        html_2md_compare(contents, "| h |\n| - |\n| P<br>+ a |");
+    }
+
+    #[test]
     fn test_ol_inline() {
         let contents = "
         <ol>\

@@ -93,6 +93,10 @@ fn write_item_marker(text: &mut String, ctx: &mut ListContext) -> (usize, usize)
     trim_trailing_space(text);
     // a nested `write` trims the buffer's start, which would shift `item_start`
     text.drain(..text.len() - text.trim_ascii_start().len());
+    // text directly in the list would run into the marker
+    if !text.is_empty() && !text.ends_with(ctx.linebreak()) {
+        text.push_str(ctx.linebreak());
+    }
     // an indent at the start of an empty buffer would be trimmed the same way
     if !text.is_empty() {
         text.extend(std::iter::repeat_n(' ', ctx.list_indent_len()));

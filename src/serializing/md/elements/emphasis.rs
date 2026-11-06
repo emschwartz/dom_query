@@ -255,7 +255,16 @@ fn push_html_emphasis(acc: &mut String, content: &str, marker: &str, holds_block
             add_block_end(acc, false);
         }
         let body = content.trim_matches(|c| c == ' ' || c == '\n');
-        let _ = write!(acc, "<{tag}>\n\n{body}\n\n</{tag}>\n\n");
+        // a list written first leaves its first line short of the indent of the rest
+        let depth = |line: &str| line.len() - line.trim_start_matches(' ').len();
+        let pad = body
+            .lines()
+            .skip(1)
+            .filter(|l| !l.is_empty())
+            .map(depth)
+            .min();
+        let pad = " ".repeat(pad.unwrap_or(0));
+        let _ = write!(acc, "<{tag}>\n\n{pad}{body}\n\n</{tag}>\n\n");
         return;
     }
     // a hard break (`  \n`) at the start keeps its spaces

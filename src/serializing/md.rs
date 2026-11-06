@@ -2705,5 +2705,13 @@ fn main() {
             "<div>x <b><blockquote>a</blockquote></b> y</div>",
             "x\n\n<strong>\n\n> a\n\n</strong>\n\ny",
         );
+        html_2md_compare(
+            "<ul><li>x<em><ul><li>a</li><li>b</li></ul></em></li></ul>",
+            "- x\n\n  <em>\n\n    - a\n    - b\n\n  </em>",
+        );
+        html_2md_compare(
+            "<ul><li>x<em><ul><li><p>a</p><p>c</p></li><li>b</li></ul></em></li></ul>",
+            "- x\n\n  <em>\n\n    - a\n\n      c\n\n    - b\n\n  </em>",
+        );
     }
 }

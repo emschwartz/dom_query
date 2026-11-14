@@ -1,14 +1,15 @@
+use bit_set::BitSet;
 use std::cell::Ref;
 
 use super::parser::parse_selector_list;
 use super::selector::{Combinator, MiniSelector};
-use crate::node::{NodeId, NodeRef, TreeNode, child_nodes};
+use crate::node::{NodeId, NodeRef, TreeNode, child_nodes, descendant_nodes};
 
 fn collect_matching_descendants(
     nodes: &Ref<'_, Vec<TreeNode>>,
     current_node_id: &NodeId,
     selector: &MiniSelector,
-    is_last_selector: bool,
+    descend_into_matches: bool,
     results: &mut Vec<NodeId>,
     pending: &mut Vec<NodeId>,
 ) {
@@ -35,16 +36,41 @@ fn collect_matching_descendants(
             results.push(child_id);
         }
 
-        // Continue the search only if:
-        // 1. The node does NOT match the selector.
-        // 2. OR this is the last selector in the path (e.g., 'p' in 'div p').
-        if !matched || is_last_selector {
+        // Skip below a match only when a descendant step follows: that step finds the inner
+        // matches from the outer node ('div' in 'div p', but not in 'div > p').
+        if !matched || descend_into_matches {
             if let Some(sibling) = next {
                 pending.push(sibling);
             }
             next = tree_node.first_child;
         }
     }
+}
+
+/// Returns `ids` once each in document order. With `outermost`, drops nodes inside another one
+/// of them: a following descendant step finds their matches from the outer node anyway.
+fn in_document_order(
+    nodes: &Ref<'_, Vec<TreeNode>>,
+    root: &NodeId,
+    ids: &[NodeId],
+    outermost: bool,
+) -> Vec<NodeId> {
+    let found: BitSet = ids.iter().map(|id| id.value()).collect();
+    let mut inside = BitSet::new();
+    let mut ordered = Vec::with_capacity(ids.len());
+    for id in descendant_nodes(Ref::clone(nodes), root) {
+        let in_found = found.contains(id.value());
+        let in_outer = nodes[id.value()]
+            .parent
+            .is_some_and(|p| inside.contains(p.value()));
+        if in_found && !(outermost && in_outer) {
+            ordered.push(id);
+        }
+        if in_found || in_outer {
+            inside.insert(id.value());
+        }
+    }
+    ordered
 }
 
 fn find_descendants<'a, 'b>(
@@ -56,11 +82,18 @@ fn find_descendants<'a, 'b>(
     // Start with the provided node ID as the initial working set
     let mut stack = vec![node.id];
     let mut iter_stack = Vec::new();
+    // Set when the working set may hold nested nodes, so each step's result needs ordering and dedup.
+    let mut nested = false;
 
     // Parse the CSS selector list and process each selector sequentially
     let (_, selectors) = parse_selector_list(path)?;
     for (idx, sel) in selectors.iter().enumerate() {
         let is_last = selectors.len() - 1 == idx;
+        let next_is_descendant = selectors
+            .get(idx + 1)
+            .is_some_and(|s| matches!(s.combinator, Combinator::Descendant));
+        let descend_into_matches = !next_is_descendant;
+        nested |= !is_last && descend_into_matches;
         let mut new_stack = vec![];
 
         match sel.combinator {
@@ -70,7 +103,7 @@ fn find_descendants<'a, 'b>(
                         &nodes,
                         node_id,
                         sel,
-                        is_last,
+                        descend_into_matches,
                         &mut new_stack,
                         &mut iter_stack,
                     );
@@ -96,10 +129,15 @@ fn find_descendants<'a, 'b>(
                 }
             }
             Combinator::Sibling => {
+                // A walk stops at a sibling an earlier walk reached: the rest was already covered.
+                let mut walked = BitSet::new();
                 for node_id in &stack {
                     let node = NodeRef::new(*node_id, tree);
                     let mut next_sibling = node.next_element_sibling();
                     while let Some(next) = next_sibling {
+                        if !walked.insert(next.id.value()) {
+                            break;
+                        }
                         next_sibling = next.next_element_sibling();
                         if sel.match_node(&next) {
                             new_stack.push(next.id);
@@ -109,6 +147,9 @@ fn find_descendants<'a, 'b>(
             }
         }
         stack = new_stack;
+        if nested && stack.len() > 1 {
+            stack = in_document_order(&nodes, &node.id, &stack, next_is_descendant);
+        }
     }
     Ok(stack
         .into_iter()
@@ -263,6 +304,7 @@ mod tests {
         let found = root.find_descendants("body p");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, p.id);
+        assert_eq!(root.find_descendants("div > div p").len(), 1);
     }
 
     #[cfg_attr(not(target_arch = "wasm32"), test)]
@@ -285,6 +327,37 @@ mod tests {
             let root = doc.root();
             let got_ids: Vec<NodeId> = root.find_descendants(sel).iter().map(|n| n.id).collect();
             assert_eq!(got_ids, expected_ids);
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn test_node_find_descendants_combinator_after_nested_match() {
+        let contents = r#"<div id="a"><p id="p0">y</p><div id="b"><p id="p1">x</p><p id="p2">z</p></div><p id="p3">w</p></div>
+            <ul id="u"><li id="l1">1</li><li id="l2">2<ul><li id="l3">3</li><li id="l4">4</li></ul></li><li id="l5">5</li></ul>
+            <div id="c"><div id="d"><div id="e"><i></i><p id="p4">v</p></div><p id="p5">u</p></div><p id="p6">t</p></div>"#;
+        let doc = Document::from(contents);
+        let selectors = [
+            "div > p",
+            "div > div > p",
+            "div > div p",
+            "div div > p",
+            "div > div ~ p",
+            "div div ~ p",
+            "ul + div p",
+            "ul > li",
+            "ul li + li",
+            "ul > li ~ li",
+            "ul li ~ li",
+            "li > ul > li",
+            "div > div + p",
+        ];
+        let root = doc.root();
+        for sel in selectors {
+            let expected_ids: Vec<NodeId> = doc.select(sel).nodes().iter().map(|n| n.id).collect();
+            let got_ids: Vec<NodeId> = root.find_descendants(sel).iter().map(|n| n.id).collect();
+            assert!(!expected_ids.is_empty(), "{sel}");
+            assert_eq!(got_ids, expected_ids, "{sel}");
         }
     }
 

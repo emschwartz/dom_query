@@ -4,6 +4,9 @@ All notable changes to the `dom_query` crate will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `NodeRef::find_descendants` no longer misses the matches of a `>`, `+` or `~` step that sit inside an earlier match (`div > p` in `<div><div><p>`), and returns each once, in document order. A `~` step no longer rescans the siblings for every element.
+
 ### Added
 - Added `NodeRef::is_ascii_empty` to check whether a text node is an empty or contains only  ASCII whitespace characters.
 - **Markdown**: write `<del>`, `<s>` and `<strike>` as `~~` strikethrough; the formatting was dropped.

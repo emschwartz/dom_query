@@ -9,13 +9,30 @@ use super::super::host::MDHost;
 use super::super::writer::{End, Gap, MdWriter, Rules, Start};
 use super::image::image_src;
 
-pub(in crate::serializing::md) fn write<H: MDHost>(
+/// A list being written: its group frame is open while `write_to` walks its children.
+pub(in crate::serializing::md) struct OpenList {
+    ctx: ListContext,
+    id: NodeId,
+    offset: usize,
+    has_items: bool,
+}
+
+/// How a child of a list is written.
+pub(in crate::serializing::md) enum ListChild {
+    /// an item: its member is open; its children are written with these options
+    Item(FormatOpts),
+    /// content directly in the list, written as a node with these options
+    Stray(FormatOpts),
+}
+
+/// Opens a list's group; `child` and `close` do the rest as `write_to` walks it.
+pub(in crate::serializing::md) fn open<H: MDHost>(
     h: &H,
     w: &mut MdWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
-) {
+) -> OpenList {
     let kind = if el.name.local == local_name!("ol") {
         let start = el
             .attr("start")
@@ -46,35 +63,49 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         _ => 0,
     };
     w.push_group(&RULES);
-    for child in list.children_it(false) {
-        if !child.has_name("li") {
-            // content directly in the list is written at its column; it keeps the cell
-            // rules, like the link label does
-            let mut opts = FormatOpts::new().include_node();
-            opts.table_cell = ctx.opts.table_cell;
-            h.write_to(w, child.id, opts);
-            continue;
-        }
-        if matches!(ctx.kind, ListKind::Ol(_)) {
-            // `<li value>` renumbers this item and the ones after it
-            if let Some(v) = list_number(&child, "value") {
-                ctx.kind = ListKind::Ol(v);
-            }
-        }
-        let marker = ctx.prefix();
-        // with content, a bullet or `1.` item can interrupt a paragraph (`CommonMark` §5.2)
-        let start = if matches!(ctx.kind, ListKind::Ul | ListKind::Ol(1)) {
-            Start::Block
-        } else {
-            Start::Weak
-        };
-        ctx.advance_ol_number();
-        w.push_member(&marker, offset, start);
-        h.write_to(w, child.id, ctx.opts.list_item());
-        w.pop_member();
+    OpenList {
+        ctx,
+        id,
+        offset,
+        has_items,
     }
-    if has_items {
-        h.set_last_list(id, use_alt_marker);
+}
+
+/// Starts a child of the list: an item opens its member, closed by `w.pop_member()`.
+pub(in crate::serializing::md) fn child(
+    w: &mut MdWriter,
+    list: &mut OpenList,
+    child: &NodeRef,
+) -> ListChild {
+    let ctx = &mut list.ctx;
+    if !child.has_name("li") {
+        // content directly in the list is written at its column; it keeps the cell
+        // rules, like the link label does
+        let mut opts = FormatOpts::new().include_node();
+        opts.table_cell = ctx.opts.table_cell;
+        return ListChild::Stray(opts);
+    }
+    if matches!(ctx.kind, ListKind::Ol(_)) {
+        // `<li value>` renumbers this item and the ones after it
+        if let Some(v) = list_number(child, "value") {
+            ctx.kind = ListKind::Ol(v);
+        }
+    }
+    let marker = ctx.prefix();
+    // with content, a bullet or `1.` item can interrupt a paragraph (`CommonMark` §5.2)
+    let start = if matches!(ctx.kind, ListKind::Ul | ListKind::Ol(1)) {
+        Start::Block
+    } else {
+        Start::Weak
+    };
+    ctx.advance_ol_number();
+    w.push_member(&marker, list.offset, start);
+    ListChild::Item(ctx.opts.list_item())
+}
+
+pub(in crate::serializing::md) fn close<H: MDHost>(h: &H, w: &mut MdWriter, list: &OpenList) {
+    if list.has_items {
+        h.set_last_list(list.id, list.ctx.alt_marker);
     }
     w.pop_group();
 }

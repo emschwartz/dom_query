@@ -700,6 +700,16 @@ impl MdWriter {
         mark
     }
 
+    /// The open span at the top, for `span_blocky`.
+    pub(super) fn top_span(&self) -> usize {
+        self.spans.len() - 1
+    }
+
+    /// Whether the open span `i` holds a block.
+    pub(super) fn span_blocky(&self, i: usize) -> bool {
+        self.spans[i].blocky
+    }
+
     /// Closes the run; returns whether it held a block.
     pub(super) fn pop_emph(&mut self) -> bool {
         let span = self.spans.pop().expect("an emphasis span");
@@ -916,6 +926,25 @@ impl MdWriter {
         self.keep_lead = m.keep_lead;
         self.keep_edges = m.keep_edges;
         self.commit(m);
+    }
+
+    /// Rolls back to `m` while marks taken after it (`inner`) and containers opened after
+    /// it are still open; those are dropped.
+    pub(super) fn rollback_nested<'m>(&mut self, m: Mark, inner: impl Iterator<Item = &'m Mark>) {
+        let mut n = 0;
+        // the earliest inner mark's copies start where `m`'s end
+        if let Some(first) = inner.inspect(|_| n += 1).min_by_key(|i| i.spans_at) {
+            self.undo_frames.truncate(first.frames_at);
+            self.undo_spans.truncate(first.spans_at);
+            self.undo_closers.truncate(first.closers_at);
+        }
+        self.live -= n;
+        // the first frame opened after the mark starts where the mark's prefix ended
+        let frames = m.from + self.undo_frames.len() - m.frames_at;
+        if let Some(f) = self.frames.get(frames) {
+            self.prefix.truncate(f.base);
+        }
+        self.rollback(m);
     }
 
     /// Replaces `old` at `pos` with `new`, moving the positions after it.

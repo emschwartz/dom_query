@@ -1,29 +1,24 @@
-use crate::{Element, NodeId, NodeRef};
+use crate::{NodeId, NodeRef};
 
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
 use super::super::text_utils::{push_escaped_pipes, trim_space, trim_trailing_space};
 use super::super::writer::{End, MdWriter, Sep, Start};
 
-pub(in crate::serializing::md) fn write<H: MDHost>(
-    h: &H,
-    w: &mut MdWriter,
-    _el: &Element,
-    id: NodeId,
-) {
+/// Writes a table as rows. Returns false when it can only be written as text, a block
+/// of its contents that the caller writes.
+pub(in crate::serializing::md) fn write<H: MDHost>(h: &H, w: &mut MdWriter, id: NodeId) -> bool {
     let table_ref = NodeRef::new(id, h.tree());
     // a table holding a table is written as text; checked before `find`, which would
     // also collect the inner tables' rows
     if has_nested_table(&table_ref) {
-        write_as_text(h, w, id);
-        return;
+        return false;
     }
     let row_nodes = table_ref.find(&["tr"]);
 
     let header_id = table_header_row(&row_nodes).map(|row| row.id);
-    if !is_table_node_writable(&table_ref, &row_nodes, header_id) {
-        write_as_text(h, w, id);
-        return;
+    if !is_table_node_writable(&row_nodes, header_id) {
+        return false;
     }
 
     let opts = FormatOpts::new().table_cell();
@@ -97,13 +92,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         text.push_str(" |\n");
     }
     w.block(text, Start::Text, Sep::Blank, End::Row, Sep::Blank);
-}
-
-/// A table written as text is still a block, also inside emphasis.
-fn write_as_text<H: MDHost>(h: &H, w: &mut MdWriter, id: NodeId) {
-    w.open_block(Start::Text, Sep::Blank);
-    h.write_to(w, id, FormatOpts::default());
-    w.close_block(End::Text, Sep::Blank);
+    true
 }
 
 /// Drops trailing cell linebreaks left by a final `<br>` or block child.
@@ -121,15 +110,7 @@ pub(in crate::serializing::md) fn ends_with_cell_break(text: &str) -> bool {
         .is_some_and(|rest| (rest.len() - rest.trim_end_matches('\\').len()) % 2 == 0)
 }
 
-fn is_table_node_writable(
-    table_node: &NodeRef,
-    rows: &[NodeRef],
-    header_id: Option<NodeId>,
-) -> bool {
-    if has_nested_table(table_node) {
-        // if table has inline table then ignore this table
-        return false;
-    }
+fn is_table_node_writable(rows: &[NodeRef], header_id: Option<NodeId>) -> bool {
     let mut common_cell_count: usize = 0;
     for row in rows {
         if header_id == Some(row.id) {

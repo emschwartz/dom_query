@@ -3316,6 +3316,42 @@ fn main() {
     }
 
     #[test]
+    fn test_emphasis_turns_to_html_once() {
+        // a run turns to html tags while containers and runs inside it are still open
+        let md = |h: &str| serialize_md(&Document::from(h).root(), false, None).to_string();
+        let cases = [
+            (
+                "<b><del><hr><p></p></del></b>",
+                "<strong>\n\n<del>\n\n---\n\n</del>\n\n</strong>",
+            ),
+            // an empty link rolls back the block it resolved: the run keeps its delimiters
+            (
+                "<em><table></table><a href=\"/u\"></a>x<ul><li>a</li></ul></em>",
+                "<em>\n\nx\n\n- a\n\n</em>",
+            ),
+            (
+                "<del>q<i><p>a</p><h1>b</h1></i></del>",
+                "<del>\n\nq\n\n<em>\n\na\n\n# b\n\n</em>\n\n</del>",
+            ),
+            (
+                "<em>a<blockquote>b<ul><li>c<strong>d<ul><li>e</li></ul></strong></li></ul></blockquote></em>",
+                "<em>\n\na\n\n> b\n> \n> - c\n> \n>   <strong>\n> \n>   d\n>     - e\n> \n>   </strong>\n\n</em>",
+            ),
+            (
+                "<em>x<a href=\"/u\">y<blockquote>z</blockquote></a><ul><li>w</li></ul></em>",
+                "<em>\n\nx[y z](/u)\n\n- w\n\n</em>",
+            ),
+        ];
+        for (html, expected) in cases {
+            assert_eq!(md(html), expected, "{html}");
+        }
+        // each level used to write its subtree twice: 2^200 walks
+        let unit = "<blockquote>w<ul><li>w<em>w<a href=/u>w";
+        let html = unit.repeat(200) + &"</a></em></li></ul></blockquote>".repeat(200);
+        assert!(md(&html).contains("<em>"));
+    }
+
+    #[test]
     fn test_list_item_block_in_deep_wrappers() {
         let _census = census::Guard;
         // writing a block nested in many wrappers must not recurse per wrapper

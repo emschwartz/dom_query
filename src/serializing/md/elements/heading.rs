@@ -1,32 +1,15 @@
 use crate::{Element, NodeId};
 
 use super::super::ctx::FormatOpts;
-use super::super::heading::escape_closing_hashes;
+use super::super::heading::{escape_closing_hashes, md_prefix};
 use super::super::host::MDHost;
-use super::super::text_utils::{add_linebreaks, double_linebreak, linebreak};
-use super::table::add_cell_block_break;
+use super::super::writer::{End, MdWriter, Sep, Start};
 
-/// Writes a heading's content and ends its block; the `#` prefix is already written.
+/// Writes a heading on one line: an ATX heading ends at the line end.
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    text: &mut String,
-    _el: &Element,
-    id: NodeId,
-    opts: FormatOpts,
-) {
-    write_heading_line(h, text, id, opts);
-    let linebreak = linebreak(opts.table_cell);
-    if opts.table_cell {
-        add_cell_block_break(text, linebreak);
-    } else {
-        add_linebreaks(text, linebreak, double_linebreak(false));
-    }
-}
-
-/// Writes a heading's content on one line: an ATX heading ends at the line end.
-pub(in crate::serializing::md) fn write_heading_line<H: MDHost>(
-    h: &H,
-    text: &mut String,
+    w: &mut MdWriter,
+    e: &Element,
     id: NodeId,
     opts: FormatOpts,
 ) {
@@ -38,18 +21,18 @@ pub(in crate::serializing::md) fn write_heading_line<H: MDHost>(
     };
     opts.include_node = false;
     opts.heading = true;
-    // a separate buffer keeps a leading `<br>` from trimming the space after the `#`s
-    let mut buf = h.scratch();
-    h.write(&mut buf, id, opts);
-    let mut content = buf.trim_ascii();
-    // a trailing hard break adds nothing; an odd run of `\` makes `\<br>` literal text
-    while let Some(rest) = content.strip_suffix("<br>") {
-        if rest.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 1 {
-            break;
-        }
-        content = rest.trim_ascii_end();
+    w.open_block(Start::Block, Sep::Blank);
+    w.raw('#').push_str(md_prefix(&e.name).unwrap_or_default());
+    let start = w.len();
+    w.push_scope(opts, false);
+    h.write_to(w, id, opts);
+    w.pop_scope();
+    let out = w.out_mut();
+    if out.len() == start {
+        // an empty heading keeps its `#`s
+        out.pop();
+    } else {
+        escape_closing_hashes(out, start);
     }
-    let start = text.len();
-    text.push_str(content);
-    escape_closing_hashes(text, start);
+    w.close_block(End::Closed, Sep::Blank);
 }

@@ -151,24 +151,8 @@ fn starts_char_reference(rest: &[u8]) -> bool {
     name.iter().all(u8::is_ascii_alphanumeric)
 }
 
-/// Escapes a trailing `!` so the `[` written right after it
-/// cannot turn the text into image syntax (`Wow![x](u)`).
-pub(super) fn escape_trailing_bang(text: &mut String) {
-    if text.ends_with('!') {
-        text.pop();
-        text.push_str("\\!");
-    }
-}
-
 pub(super) fn trim_trailing_space(s: &mut String) {
     s.truncate(s.trim_end_matches(' ').len());
-}
-
-pub(super) fn add_linebreaks(text: &mut String, linebreak: &str, end: &str) {
-    trim_trailing_space(text);
-    while !text.ends_with(end) {
-        text.push_str(linebreak);
-    }
 }
 
 /// Formats a Markdown link destination and writes it directly to the buffer.
@@ -232,23 +216,9 @@ pub(super) fn push_title(text: &mut String, title: &str) {
     text.push('"');
 }
 
-pub(super) fn push_block_space(text: &mut String) {
-    if !text.is_empty() && !text.ends_with(|c: char| c.is_ascii_whitespace()) {
-        text.push(' ');
-    }
-}
-
 pub(super) fn trim_space(s: &mut String) {
     s.truncate(s.trim_ascii_end().len());
     s.drain(..s.len() - s.trim_ascii_start().len());
-}
-
-pub(super) const fn linebreak(br: bool) -> &'static str {
-    if br { "<br>" } else { "\n" }
-}
-
-pub(super) const fn double_linebreak(br: bool) -> &'static str {
-    if br { "<br><br>" } else { "\n\n" }
 }
 
 /// Escapes special characters for HTML attribute values (quotes, ampersands, and &nbsp;).

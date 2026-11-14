@@ -3,10 +3,11 @@ use std::ops::{Deref, DerefMut};
 
 use html5ever::QualName;
 
-use crate::node::{TreeNode, child_nodes};
+use crate::node::TreeNode;
 use crate::{NodeId, Tree};
 
 use super::ctx::FormatOpts;
+use super::writer::MdWriter;
 
 /// A scratch buffer that returns to the host's pool when dropped.
 pub(super) struct ScratchBuf<'h, H: MDHost> {
@@ -54,15 +55,9 @@ pub(super) trait MDHost: Sized {
     /// Records the last written list; `alt_marker` is the marker that list used,
     /// and the next same-type list gets the opposite one.
     fn set_last_list(&self, list: NodeId, alt_marker: bool);
+    /// Puts back what `last_list` returned, for a rendering that is rolled back.
+    fn reset_last_list(&self, last: Option<(NodeId, bool)>);
 
-    /// Writes `id` when `opts.include_node`, otherwise its children; trims unless included.
-    fn write(&self, out: &mut String, id: NodeId, opts: FormatOpts);
-
-    /// Writes each child in document order, without trimming.
-    fn write_children(&self, out: &mut String, id: NodeId, opts: FormatOpts) {
-        let nodes = self.nodes();
-        for child in child_nodes(nodes, &id, false) {
-            self.write(out, child, opts);
-        }
-    }
+    /// Writes `id` when `opts.include_node`, otherwise its children, through `w`.
+    fn write_to(&self, w: &mut MdWriter, id: NodeId, opts: FormatOpts);
 }

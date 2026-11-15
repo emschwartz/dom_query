@@ -67,3 +67,8 @@ pub(super) fn write_element<H: MDHost>(
     }
     true
 }
+
+pub(super) fn writes_content_first(e: &Element) -> bool {
+    emphasis::md_emphasis(&e.name).is_some()
+        || (e.name.local == local_name!("a") && e.has_attr("href"))
+}

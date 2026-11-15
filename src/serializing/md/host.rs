@@ -45,6 +45,16 @@ pub(super) trait MDHost: Sized {
         }
     }
 
+    /// Runs `write` into `buf`, then puts before `text`'s next markup the space owed
+    /// before the buffer's first visible character.
+    fn with_lead_space(
+        &self,
+        text: &mut String,
+        buf: &mut String,
+        opts: FormatOpts,
+        write: impl FnOnce(&mut String),
+    );
+
     fn tree(&self) -> &Tree;
     fn nodes(&self) -> Ref<'_, Vec<TreeNode>>;
     fn is_skipped(&self, name: &QualName) -> bool;

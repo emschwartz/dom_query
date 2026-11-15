@@ -29,6 +29,12 @@ pub struct MDSerializer<'a> {
     bufs: RefCell<Vec<String>>,
     /// A word boundary left at the end of a write, for the write that follows it.
     word_space: Cell<bool>,
+    /// A word space owed before the inline buffer being written, set by `push_space`
+    /// at its start and placed by `with_lead_space` before the buffer's markup.
+    lead_space: Cell<bool>,
+    /// Whether an emphasis or link just written ends, behind its markup, where no space goes;
+    /// set in `with_lead_space`, cleared by text nodes and leaf elements.
+    tail: Cell<bool>,
 }
 
 impl<'a> MDSerializer<'a> {
@@ -43,6 +49,8 @@ impl<'a> MDSerializer<'a> {
             depth: Cell::new(0),
             bufs: RefCell::default(),
             word_space: Cell::new(false),
+            lead_space: Cell::new(false),
+            tail: Cell::new(false),
         }
     }
 
@@ -74,10 +82,13 @@ impl<'a> MDSerializer<'a> {
             return false;
         }
         self.depth.set(depth + 1);
-        let at = text.len();
+        let (at, lead) = (text.len(), self.lead_space.get());
         let spaced = std::mem::take(&mut space.0);
-        if spaced {
-            PendingSpace::push(text, None, opts);
+        // emphasis and links write their content first, so its first character decides
+        if spaced && elements::writes_content_first(e) {
+            self.word_space.set(true);
+        } else if spaced {
+            self.push_space(text, None, self.tail.get(), opts);
         }
         let start = text.len();
         let handled = elements::write_element(self, text, e, id, opts);
@@ -85,7 +96,10 @@ impl<'a> MDSerializer<'a> {
         // an element that writes nothing leaves the space pending
         if text.len() == start {
             text.truncate(at);
+            self.lead_space.set(lead);
             space.0 = spaced;
+        } else if leaf {
+            self.tail.set(false);
         }
         space.0 |= self.word_space.take();
         handled
@@ -117,6 +131,24 @@ impl<'a> MDSerializer<'a> {
             }
         }
     }
+
+    /// No space before whitespace or closing punctuation, or after an opening bracket or a `<br>`
+    /// tag (code writes none, text escapes its `<`), also behind markup (`tail`).
+    fn push_space(&self, text: &mut String, next: Option<char>, tail: bool, opts: FormatOpts) {
+        let closing = |c: char| {
+            c.is_whitespace() || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
+        };
+        let opening = |c: char| c.is_whitespace() || matches!(c, '(' | '[' | '{');
+        let br = !opts.skip_md && ends_with_cell_break(text);
+        if next.is_some_and(closing) || text.ends_with(opening) || tail || br {
+            return;
+        }
+        if text.is_empty() && !opts.skip_md {
+            self.lead_space.set(true);
+        } else {
+            push_block_space(text);
+        }
+    }
 }
 
 /// A word boundary written as a space only before the next text that starts a word;
@@ -133,26 +165,11 @@ impl PendingSpace {
         };
     }
 
-    pub(super) fn flush(&mut self, text: &mut String, next: &str, opts: FormatOpts) {
+    fn flush(&mut self, h: &MDSerializer, text: &mut String, next: &str, opts: FormatOpts) {
         if next.is_empty() || !std::mem::take(&mut self.0) {
             return;
         }
-        Self::push(text, next.chars().next(), opts);
-    }
-
-    /// No space before whitespace or closing punctuation, or after an opening bracket or a `<br>`
-    /// tag (code writes none, text escapes its `<`). `next` is unknown before an element,
-    /// so one starting with punctuation still gets the space.
-    fn push(text: &mut String, next: Option<char>, opts: FormatOpts) {
-        let closing = |c: char| {
-            c.is_whitespace() || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
-        };
-        let opening = |c: char| c.is_whitespace() || matches!(c, '(' | '[' | '{');
-        let br = !opts.skip_md && ends_with_cell_break(text);
-        if next.is_some_and(closing) || text.ends_with(opening) || br {
-            return;
-        }
-        push_block_space(text);
+        h.push_space(text, next.chars().next(), h.tail.get(), opts);
     }
 }
 
@@ -169,6 +186,27 @@ impl MDHost for MDSerializer<'_> {
         }
         buf.clear();
         pool.push(buf);
+    }
+
+    fn with_lead_space(
+        &self,
+        text: &mut String,
+        buf: &mut String,
+        opts: FormatOpts,
+        write: impl FnOnce(&mut String),
+    ) {
+        let outer = self.lead_space.replace(false);
+        write(buf);
+        // the content checked the visible end before it, so only `text` is left to check
+        if self.lead_space.replace(outer) {
+            self.push_space(text, None, false, opts);
+        }
+        // the content's visible end: whitespace (and `&nbsp;`), an opening bracket or a `<br>`
+        let tail = match buf.as_bytes() {
+            [.., b' ' | b'(' | b'[' | b'{'] | [.., 0xC2, 0xA0] => true,
+            _ => self.tail.get() || ends_with_cell_break(buf),
+        };
+        self.tail.set(tail);
     }
 
     fn tree(&self) -> &Tree {
@@ -216,8 +254,9 @@ impl MDHost for MDSerializer<'_> {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => {
-                            block_space.flush(text, contents, opts);
+                            block_space.flush(self, text, contents, opts);
                             push_normalized_text(text, contents, opts);
+                            self.tail.set(false);
                         }
                         NodeData::Element(e) => {
                             if self.is_skipped(&e.name) {

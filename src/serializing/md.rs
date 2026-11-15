@@ -2668,11 +2668,65 @@ R 2, *C 1* R 2, *C 2*";
         html_2md_compare("<p>(<svg></svg><b>x</b>)</p>", "(**x**)");
         html_2md_compare("<p>(<svg></svg><a href=\"/u\">x</a>)</p>", "([x](/u))");
         html_2md_compare("<p>a&nbsp;<svg></svg><b>b</b></p>", "a\u{a0}**b**");
-        html_2md_compare("<p>a<svg></svg><b>.</b></p>", "a **.**");
-        html_2md_compare("<p>Hello<svg></svg><a href=\"u\">.</a></p>", "Hello [.](u)");
         html_2md_compare("<p>Hi!<svg></svg><a href=\"u\">x</a></p>", "Hi! [x](u)");
-        // the text before is Markdown source, so a bracket inside markup gets a space
-        html_2md_compare("<p><b>(</b><svg></svg>x</p>", "<strong>(</strong> x");
+        // both sides are judged by the visible characters, through markup; an option is the same
+        for apart in ["<svg></svg>", "<select><option></option></select>"] {
+            html_2md_compare(&format!("<p>a{apart}<b>.</b></p>"), "a<strong>.</strong>");
+            html_2md_compare(
+                &format!("<p>Hello{apart}<a href=\"u\">.</a></p>"),
+                "Hello[.](u)",
+            );
+            html_2md_compare(&format!("<p><b>(</b>{apart}x</p>"), "<strong>(</strong>x");
+        }
+        // an empty element hides nothing
+        html_2md_compare(
+            "<p><b>(</b><code></code><svg></svg>x</p>",
+            "<strong>(</strong>x",
+        );
+        html_2md_compare(
+            "<p><b>(</b><svg></svg><code>x</code></p>",
+            "<strong>(</strong>`x`",
+        );
+        // a boundary that starts emphasis or a link label is judged the same way
+        html_2md_compare(
+            "<p>See<a href=\"/\"><svg></svg>Home</a></p>",
+            "See [Home](/)",
+        );
+        html_2md_compare(
+            "<p>a<a href=\"u\"><b><svg></svg>x</b></a></p>",
+            "a [**x**](u)",
+        );
+        html_2md_compare(
+            "<p>Hello<svg></svg><a href=\"u\"><svg></svg>.</a></p>",
+            "Hello[.](u)",
+        );
+        html_2md_compare(
+            "<p>a<b><svg><title>i</title></svg><svg></svg><b>x</b></b></p>",
+            "a **i x**",
+        );
+        html_2md_compare("<p>a<svg></svg><b><i>x(</i></b></p>", "a ***x(***");
+        // a link label ending in a bracket, `&nbsp;` or `<br>` hides it behind `](w)`
+        html_2md_compare(
+            "<p><a href=\"w\"><b>(</b></a><svg></svg>x</p>",
+            "[**(**](w)x",
+        );
+        html_2md_compare("<p><a href=\"w\">a{</a><svg></svg>x</p>", "[a{](w)x");
+        html_2md_compare(
+            "<p><a href=\"w\">a&nbsp;</a><svg></svg>x</p>",
+            "[a\u{a0}](w)x",
+        );
+        html_2md_compare(
+            "<a href=\"w\">a<br></a><svg></svg><b>x</b>",
+            "[a<br>](w)**x**",
+        );
+        // text or an image after the emphasis is what comes before the boundary
+        html_2md_compare("<p><b>(</b>y<svg></svg>x</p>", "<strong>(</strong>y x");
+        html_2md_compare(
+            "<p><b>(</b><img src=\"s\" alt=\"i\"><svg></svg>x</p>",
+            "**(**![i](s) x",
+        );
+        // a block at the start of code is no boundary
+        html_2md_compare("a<b><code><div></div>x</code></b>", "a<strong>`x`</strong>");
         // a `<br>` tag needs no space after it
         html_2md_compare("<a href=\"/u\">a<svg></svg><br>b</a>", "[a<br>b](/u)");
         // code drops a boundary left at its end

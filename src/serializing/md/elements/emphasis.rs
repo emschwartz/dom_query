@@ -28,7 +28,9 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let em_opts = opts.include_node().inline().emphasis_scope(cur_scope);
     let mut emphasis_text = h.scratch();
 
-    h.write_children(&mut emphasis_text, id, em_opts);
+    h.with_lead_space(text, &mut emphasis_text, opts, |buf| {
+        h.write_children(buf, id, em_opts);
+    });
 
     if emphasis_text.is_empty() {
         return;
@@ -298,7 +300,7 @@ fn push_html_emphasis(
     }
 }
 
-const fn md_emphasis(name: &QualName) -> Option<&'static str> {
+pub(in crate::serializing::md) const fn md_emphasis(name: &QualName) -> Option<&'static str> {
     match name.local {
         local_name!("strong") | local_name!("b") => Some("**"),
         local_name!("em") | local_name!("i") => Some("*"),

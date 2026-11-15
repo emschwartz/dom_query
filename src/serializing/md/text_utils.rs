@@ -10,10 +10,10 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
         return;
     }
 
-    // a link body buffer starts after its `[`, so it keeps its leading space
-    let follows_newline = text.ends_with(['\n', ' ']) || (text.is_empty() && !f_opts.link_body);
-    let push_start_whitespace = (f_opts.inline || !follows_newline)
-        && new_text.starts_with(|c: char| c.is_ascii_whitespace());
+    // callers pass only `skip_escape`: alt and title text, never link bodies or list items
+    let follows_newline = text.is_empty() || text.ends_with(['\n', ' ']);
+    let push_start_whitespace =
+        !follows_newline && new_text.starts_with(|c: char| c.is_ascii_whitespace());
     let push_end_whitespace = new_text.ends_with(|c: char| c.is_ascii_whitespace());
 
     let escape = !f_opts.skip_escape;
@@ -21,10 +21,8 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
 
     let Some(first) = iter.next() else { return };
 
-    // only the first word of a text node can continue a Markdown line;
-    // a link body sits after its `[`, never at a line start
-    let is_line_start =
-        !f_opts.link_body && (text.is_empty() || text.ends_with('\n') || f_opts.list_item);
+    // only the first word of a text node can continue a Markdown line
+    let is_line_start = text.is_empty() || text.ends_with('\n');
     if push_start_whitespace {
         text.push(' ');
     } else if escape && matches!(first, "." | ")") && ends_with_marker_digits(text) {
@@ -151,24 +149,8 @@ fn starts_char_reference(rest: &[u8]) -> bool {
     name.iter().all(u8::is_ascii_alphanumeric)
 }
 
-/// Escapes a trailing `!` so the `[` written right after it
-/// cannot turn the text into image syntax (`Wow![x](u)`).
-pub(super) fn escape_trailing_bang(text: &mut String) {
-    if text.ends_with('!') {
-        text.pop();
-        text.push_str("\\!");
-    }
-}
-
 pub(super) fn trim_trailing_space(s: &mut String) {
     s.truncate(s.trim_end_matches(' ').len());
-}
-
-pub(super) fn add_linebreaks(text: &mut String, linebreak: &str, end: &str) {
-    trim_trailing_space(text);
-    while !text.ends_with(end) {
-        text.push_str(linebreak);
-    }
 }
 
 /// Formats a Markdown link destination and writes it directly to the buffer.
@@ -232,23 +214,9 @@ pub(super) fn push_title(text: &mut String, title: &str) {
     text.push('"');
 }
 
-pub(super) fn push_block_space(text: &mut String) {
-    if !text.is_empty() && !text.ends_with(|c: char| c.is_ascii_whitespace()) {
-        text.push(' ');
-    }
-}
-
 pub(super) fn trim_space(s: &mut String) {
     s.truncate(s.trim_ascii_end().len());
     s.drain(..s.len() - s.trim_ascii_start().len());
-}
-
-pub(super) const fn linebreak(br: bool) -> &'static str {
-    if br { "<br>" } else { "\n" }
-}
-
-pub(super) const fn double_linebreak(br: bool) -> &'static str {
-    if br { "<br><br>" } else { "\n\n" }
 }
 
 /// Escapes special characters for HTML attribute values (quotes, ampersands, and &nbsp;).
@@ -326,11 +294,6 @@ mod tests {
         }
         text.pop();
         assert_eq!(text, r"\#h \>q \-l \+m 2024\. 5\) .");
-
-        // a leading space written inline does not hide the line start
-        let mut text = String::new();
-        push_normalized_text(&mut text, " # x", FormatOpts::new().inline());
-        assert_eq!(text, r" \# x");
 
         // escape: false is used for inline code content: only backticks are
         // escaped so they cannot terminate the code span

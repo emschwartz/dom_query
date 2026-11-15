@@ -1,120 +1,65 @@
 use html5ever::local_name;
 
-use crate::{Element, NodeId, NodeRef};
+use crate::Element;
 
 use super::super::ctx::FormatOpts;
-use super::super::host::MDHost;
-use super::super::serializer::add_block_end;
-use super::super::text_utils::{
-    escape_trailing_bang, push_block_space, push_md_url, push_normalized_text, push_title,
-};
-use super::list::node_is_block;
+use super::super::text_utils::{push_md_url, push_title};
+use super::super::writer::{End, MdWriter, Sep, Start};
 
-pub(in crate::serializing::md) fn write<H: MDHost>(
-    h: &H,
-    text: &mut String,
-    el: &Element,
-    id: NodeId,
-    href: &str,
-    opts: FormatOpts,
-) {
-    let default_opts = FormatOpts::new();
-
-    let mut link_text = h.scratch();
+/// Starts a link: its text is captured. Returns the options for its children.
+pub(in crate::serializing::md) fn open(w: &mut MdWriter, opts: FormatOpts) -> FormatOpts {
     // the label keeps the cell rules, so a code span in it still escapes its pipes
-    let mut label_opts = default_opts.link_body();
+    let mut label_opts = FormatOpts::new().link_body();
     label_opts.table_cell = opts.table_cell;
-    h.write(&mut link_text, id, label_opts);
+    w.push_capture(label_opts, false);
+    label_opts
+}
 
-    // a link with only whitespace to show still separates the words around it
-    if link_text.trim_ascii().is_empty() {
-        if !link_text.is_empty() {
-            push_normalized_text(text, &link_text, default_opts);
+/// Ends a link that `open` started with `opts`: writes its text and destination.
+pub(in crate::serializing::md) fn close(w: &mut MdWriter, el: &Element, opts: FormatOpts) {
+    let cap = w.pop_capture();
+    if cap.text.is_empty() && cap.trail.breaks() == 0 {
+        // nothing to show: the words around it are still apart
+        if !cap.trail.is_empty() {
+            w.word_space();
         }
+        w.recycle(cap.text);
         return;
     }
-
-    // text before the link must not join the paragraph its first block starts
-    let node = NodeRef::new(id, h.tree());
-    if starts_with_block(&node) {
-        push_block_sep(text, opts);
+    // a block at an edge of the text is set off by a blank line, or a space where none fits
+    let blank_edge = !(opts.link_body || opts.inline || opts.list_item || opts.heading);
+    if cap.lead.joins() {
+        if blank_edge {
+            w.open_block(Start::Text, Sep::Blank);
+        } else {
+            w.space_after_text();
+        }
     }
-
-    // an unescaped trailing `!` would turn `[x](u)` into image syntax
-    escape_trailing_bang(text);
+    let text = w.raw('[');
+    // an unescaped `!` before it would make it an image
+    if text.ends_with('!') {
+        text.insert(text.len() - 1, '\\');
+    }
     text.push('[');
-    text.push_str(&link_text);
+    cap.lead.push_kept(text);
+    text.push_str(&cap.text);
+    cap.trail.push_kept(text);
     text.push_str("](");
-    push_md_url(text, href);
-
+    push_md_url(
+        text,
+        el.attr_ref(local_name!("href")).expect("a link with href"),
+    );
     if let Some(title) = el.attr_ref(local_name!("title")) {
         push_title(text, title);
     }
-
     text.push(')');
-
     // text after the link must not join the paragraph its last block ended
-    if ends_with_block(&node) {
-        push_block_sep(text, opts);
-    }
-}
-
-fn push_block_sep(text: &mut String, opts: FormatOpts) {
-    if opts.link_body || opts.inline || opts.list_item || opts.heading {
-        // no blank line fits here, as in link text
-        push_block_space(text);
-    } else {
-        add_block_end(text, opts.table_cell);
-    }
-}
-
-fn starts_with_block(node: &NodeRef) -> bool {
-    edge_is_block(node, false)
-}
-
-fn ends_with_block(node: &NodeRef) -> bool {
-    edge_is_block(node, true)
-}
-
-fn edge_is_block<'a>(node: &NodeRef<'a>, end: bool) -> bool {
-    let child = |n: &NodeRef<'a>| if end { n.last_child() } else { n.first_child() };
-    let sibling = |n: &NodeRef<'a>| {
-        if end {
-            n.prev_sibling()
+    if cap.trail.joins() {
+        if blank_edge {
+            w.close_block(End::Text, Sep::Blank);
         } else {
-            n.next_sibling()
+            w.word_space();
         }
-    };
-    // a loop, not recursion: deep nesting must not overflow the stack;
-    // an element that holds nothing, such as an empty `<span>`, is passed over
-    let mut cur = child(node);
-    while let Some(c) = cur {
-        if c.is_element() {
-            // a list item outside a list is still a block
-            if node_is_block(&c) || c.has_name("li") {
-                return true;
-            }
-            if let Some(first) = child(&c) {
-                cur = Some(first);
-                continue;
-            }
-            // an image and a break write content of their own, so they end the walk
-            if c.has_name("img") || c.has_name("br") {
-                return false;
-            }
-        } else if c.is_text() && !c.is_ascii_empty() {
-            return false;
-        }
-        let mut n = c;
-        cur = loop {
-            if let Some(s) = sibling(&n) {
-                break Some(s);
-            }
-            match n.parent() {
-                Some(p) if p.id != node.id => n = p,
-                _ => break None,
-            }
-        };
     }
-    false
+    w.recycle(cap.text);
 }

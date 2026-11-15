@@ -1,27 +1,20 @@
 use html5ever::local_name;
 use tendril::StrTendril;
 
-use crate::{Element, NodeId};
+use crate::Element;
 
 use super::super::ctx::FormatOpts;
-use super::super::host::MDHost;
 use super::super::text_utils::{push_md_url, push_normalized_text, push_title};
+use super::super::writer::MdWriter;
 
-pub(in crate::serializing::md) fn write<H: MDHost>(
-    _h: &H,
-    text: &mut String,
-    el: &Element,
-    _id: NodeId,
-    _opts: FormatOpts,
-) {
+pub(in crate::serializing::md) fn write(w: &mut MdWriter, el: &Element) {
     if let Some(src) = image_src(el) {
+        let text = w.raw('!');
         text.push_str("![");
-
         if let Some(alt) = el.attr_ref(local_name!("alt")) {
             push_normalized_text(text, alt, FormatOpts::new());
         }
-        text.push(']');
-        text.push('(');
+        text.push_str("](");
         push_md_url(text, &src);
         if let Some(title) = el.attr_ref(local_name!("title")) {
             push_title(text, title);

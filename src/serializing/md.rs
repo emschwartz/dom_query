@@ -6,8 +6,8 @@ mod ext;
 mod heading;
 mod host;
 mod serializer;
-mod text_iter;
 mod text_utils;
+mod writer;
 
 use tendril::StrTendril;
 
@@ -28,16 +28,95 @@ mod tests {
 
     use super::*;
 
+    /// Census mode: with `MD_CENSUS=<path>` set, every mismatch is appended to `<path>`
+    /// as a JSON line and the test fails at its end (via `Guard`), not at the first one.
+    mod census {
+        use std::cell::Cell;
+        use std::io::Write;
+
+        thread_local! {
+            static MISMATCHES: Cell<usize> = const { Cell::new(0) };
+        }
+
+        pub(super) struct Guard;
+
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                let n = MISMATCHES.with(|m| m.replace(0));
+                assert!(
+                    n == 0 || std::thread::panicking(),
+                    "{n} pinned comparison(s) mismatched (see MD_CENSUS file)"
+                );
+            }
+        }
+
+        fn json(s: &str) -> String {
+            let mut out = String::from("\"");
+            for c in s.chars() {
+                match c {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c if (c as u32) < 0x20 => {
+                        let _ = std::fmt::Write::write_fmt(
+                            &mut out,
+                            format_args!("\\u{:04x}", c as u32),
+                        );
+                    }
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+
+        fn append(path: &str, line: &str) {
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
+            f.write_all(line.as_bytes()).unwrap();
+        }
+
+        /// Records the comparison; returns false when census mode is off.
+        pub(super) fn record(html: &str, expected: &str, got: &str) -> bool {
+            let Ok(path) = std::env::var("MD_CENSUS") else {
+                return false;
+            };
+            let test = std::thread::current().name().unwrap_or("?").to_owned();
+            append(&format!("{path}.count"), "1\n");
+            if expected != got {
+                MISMATCHES.with(|m| m.set(m.get() + 1));
+                let line = format!(
+                    "{{\"test\":{},\"html\":{},\"expected\":{},\"got\":{}}}\n",
+                    json(&test),
+                    json(html),
+                    json(expected),
+                    json(got)
+                );
+                append(&path, &line);
+            }
+            true
+        }
+    }
+
     #[track_caller]
     fn html_2md_compare(html_contents: &str, expected: &str) {
         let doc = Document::from(html_contents);
         let root_node = &doc.root();
         let md_text = serialize_md(root_node, false, None);
+        if census::record(html_contents, expected, md_text.as_ref()) {
+            return;
+        }
         assert_eq!(md_text.as_ref(), expected);
     }
 
     #[test]
     fn test_heading_closing_hashes() {
+        let _census = census::Guard;
         // a trailing run of `#` would be dropped as the closing sequence
         html_2md_compare("<h2>Title #</h2>", "## Title \\#");
         html_2md_compare("<h1>#</h1>", "# \\#");
@@ -48,6 +127,7 @@ mod tests {
 
     #[test]
     fn test_heading_one_line() {
+        let _census = census::Guard;
         // an ATX heading ends at its line end: breaks stay inline, blocks join with a space
         html_2md_compare("<h2>a<br>b</h2>", "## a<br>b");
         html_2md_compare("<h2><br>a</h2>", "## <br>a");
@@ -77,6 +157,7 @@ mod tests {
 
     #[test]
     fn test_headings() {
+        let _census = census::Guard;
         // when passing include_node: true, leading and trailing whitespaces will be kept.
         let contents = r"<h1>Heading 1</h1>
         <h2>Heading 2</h2>
@@ -109,6 +190,7 @@ mod tests {
 
     #[test]
     fn test_escaping() {
+        let _census = census::Guard;
         // Punctuation that has no Markdown meaning in prose is not escaped.
         html_2md_compare("<p>Foo. Bar!</p>", "Foo. Bar!");
         html_2md_compare(
@@ -179,6 +261,7 @@ mod tests {
 
     #[test]
     fn test_tilde_escaping() {
+        let _census = census::Guard;
         html_2md_compare("<p>~~~</p><p>code?</p>", "\\~\\~\\~\n\ncode?");
         html_2md_compare("<p>~~strike~~</p>", "\\~\\~strike\\~\\~");
         html_2md_compare(
@@ -190,6 +273,7 @@ mod tests {
 
     #[test]
     fn test_italic() {
+        let _census = census::Guard;
         let contents = r"<h4><i>Italic Text</i></h4>";
         let expected = "#### *Italic Text*";
 
@@ -198,6 +282,7 @@ mod tests {
 
     #[test]
     fn test_span_italic() {
+        let _census = census::Guard;
         let contents = r"<span>It`s like <i>that</i></span>";
         let expected = r"It\`s like *that*";
 
@@ -206,6 +291,7 @@ mod tests {
 
     #[test]
     fn test_bold_italic() {
+        let _census = census::Guard;
         let contents = r"<span>It`s like <b><i>that</i></b></span>";
         let expected = r"It\`s like ***that***";
 
@@ -214,6 +300,7 @@ mod tests {
 
     #[test]
     fn test_simple_code() {
+        let _census = census::Guard;
         let contents = r"<span>It`s like <code>that</code></span>";
         let expected = r"It\`s like `that`";
         html_2md_compare(contents, expected);
@@ -221,6 +308,7 @@ mod tests {
 
     #[test]
     fn test_code_edge_spaces() {
+        let _census = census::Guard;
         // a parser strips one space from each side of `` ` a ` ``, so the
         // content is padded to keep both
         html_2md_compare("<p><code> a </code></p>", "`  a  `");
@@ -235,6 +323,7 @@ mod tests {
 
     #[test]
     fn test_code_with_blocks() {
+        let _census = census::Guard;
         // blocks in inline code are joined with a space, not glued together
         html_2md_compare("<code><p>a</p><ul><li>b</li></ul></code>", "`a b`");
         html_2md_compare("<code>a<div>b</div>c</code>", "`a b c`");
@@ -253,6 +342,7 @@ mod tests {
 
     #[test]
     fn test_false_multiline_code() {
+        let _census = census::Guard;
         let contents = r"<span>
         It`s like 
         <code>
@@ -265,6 +355,7 @@ mod tests {
 
     #[test]
     fn test_multiline_code() {
+        let _census = census::Guard;
         let contents = r"<code>$ cargo new hello
     Created binary (application) `hello` package
 
@@ -280,6 +371,7 @@ $ cd hello
 
     #[test]
     fn test_code_span_with_backticks() {
+        let _census = census::Guard;
         // Backslash escapes are not interpreted inside code spans, so content
         // containing backticks must be wrapped in a longer delimiter run
         // (CommonMark code fence rule), with spaces padding the content.
@@ -292,6 +384,7 @@ $ cd hello
     }
     #[test]
     fn test_text_after_nested_list() {
+        let _census = census::Guard;
         // text after a nested list stays in its item, indented to the content column
         html_2md_compare(
             "<ul><li>a<ul><li>x</li></ul>tail</li><li>b</li></ul>",
@@ -318,6 +411,7 @@ $ cd hello
     }
     #[test]
     fn test_nested_list_end_in_item() {
+        let _census = census::Guard;
         // a nested list ends with a blank line only where the next line would
         // continue its last item; anywhere else it would make the parent list loose
         html_2md_compare(
@@ -425,6 +519,7 @@ $ cd hello
 
     #[test]
     fn test_adjacent_lists() {
+        let _census = census::Guard;
         // a list right after one of the same type switches its marker, or the
         // two would read as one loose list
         html_2md_compare(
@@ -505,6 +600,7 @@ $ cd hello
 
     #[test]
     fn test_task_list() {
+        let _census = census::Guard;
         html_2md_compare(
             r#"<ul><li><input type="checkbox"> a</li><li><input type="checkbox" checked> b</li></ul>"#,
             "- [ ] a\n- [x] b",
@@ -540,6 +636,7 @@ $ cd hello
 
     #[test]
     fn test_task_list_content() {
+        let _census = census::Guard;
         // the marker needs content on its own line; text in a following block
         // would be separated from it by a blank line and leave the item
         html_2md_compare(
@@ -586,6 +683,7 @@ $ cd hello
 
     #[test]
     fn test_task_list_skip_tags() {
+        let _census = census::Guard;
         // a skipped image stays dropped, so a checked box with only an image is no task item
         let doc = Document::from(
             r#"<ul><li><input type="checkbox" checked><img src="/i.png" alt="i"></li></ul>"#,
@@ -600,6 +698,7 @@ $ cd hello
 
     #[test]
     fn test_ul() {
+        let _census = census::Guard;
         let contents = "<h3>Pizza Margherita Ingredients</h3>\
         <ul>\
             <li>Pizza Dough</li>\
@@ -623,6 +722,7 @@ $ cd hello
 
     #[test]
     fn test_ol() {
+        let _census = census::Guard;
         let contents = "<h3>Pizza Margherita Ingredients</h3>\
         <ol>\
             <li>Pizza Dough</li>\
@@ -646,6 +746,7 @@ $ cd hello
 
     #[test]
     fn test_bad_ol() {
+        let _census = census::Guard;
         let contents = "<h3>Pizza Margherita Ingredients</h3>\
         <ol>\
             <li>Pizza Dough</li>\
@@ -669,6 +770,7 @@ $ cd hello
 
     #[test]
     fn test_list_stray_text() {
+        let _census = census::Guard;
         // text directly in a list ends its line before the next item's marker
         html_2md_compare("<ul>Partei<li>a</li></ul>", "Partei\n\n- a");
         // an empty first item would make `-` a setext underline
@@ -723,6 +825,7 @@ $ cd hello
 
     #[test]
     fn test_list_empty_neighbors() {
+        let _census = census::Guard;
         // an element that renders nothing is not the item's first or last content
         html_2md_compare(
             "<ul><li><h1>a</h1></li><li><p>z</p><span></span></li></ul>",
@@ -775,6 +878,7 @@ $ cd hello
 
     #[test]
     fn test_list_trailing_stray_text() {
+        let _census = census::Guard;
         // stray text after the last item writes no item, so it must not hide it
         html_2md_compare(
             "<ul><li>x</li><li><p>z</p></li>tail</ul>",
@@ -784,6 +888,7 @@ $ cd hello
 
     #[test]
     fn test_ol_inline() {
+        let _census = census::Guard;
         let contents = "
         <ol>\
             <li>Item 1</li>\
@@ -821,6 +926,7 @@ $ cd hello
 
     #[test]
     fn test_ul_inline() {
+        let _census = census::Guard;
         let contents = "
         <ul>\
             <li>Item 1</li>\
@@ -858,6 +964,7 @@ $ cd hello
 
     #[test]
     fn test_orphan_list_item() {
+        let _census = census::Guard;
         // an item outside a list starts its own line
         html_2md_compare("<div><b>x:</b><li>y</li></div>", "**x:**\ny");
         let contents = "<table><tr><th>h</th></tr><tr><td>x<li>y</li></td></tr></table>";
@@ -866,6 +973,7 @@ $ cd hello
 
     #[test]
     fn test_list_with_paragraphs() {
+        let _census = census::Guard;
         let contents = "<ol>
             <li>
                 <p>Paragraph 1-1</p>
@@ -894,6 +1002,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_ending_in_paragraph() {
+        let _census = census::Guard;
         // the blank line after a paragraph is dropped at the list's end, so
         // the one before it keeps the list loose
         html_2md_compare("<ul><li>x</li><li><p>z</p></li></ul>", "- x\n\n- z");
@@ -938,6 +1047,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_with_paragraph_in_code() {
+        let _census = census::Guard;
         // code writes a `<p>` into its span, so it starts no paragraph and the list stays tight
         html_2md_compare(
             "<ul><li><code><p>a</p></code></li><li>b</li></ul>",
@@ -966,6 +1076,7 @@ Another Paragraph";
 
     #[test]
     fn test_nested_list_in_item_with_paragraphs() {
+        let _census = census::Guard;
         html_2md_compare(
             "<ul><li><p>a</p><ul><li><p>b</p></li><li><p>c</p></li></ul></li></ul>",
             "- a\n\n    - b\n\n    - c",
@@ -979,6 +1090,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_wrappers() {
+        let _census = census::Guard;
         // a table written as text trims the block it is in, but not its nested list's column
         html_2md_compare(
             "<ul><li><section><ul><li>a</li><li>b</li></ul>t<table></table></section></li></ul>",
@@ -1021,6 +1133,7 @@ Another Paragraph";
 
     #[test]
     fn test_ordered_list_start_and_value() {
+        let _census = census::Guard;
         html_2md_compare("<ol start=\"5\"><li>a</li><li>b</li></ol>", "5. a\n6. b");
         html_2md_compare(
             "<ol><li>a</li><li value=\"9\">b</li><li>c</li></ol>",
@@ -1076,6 +1189,7 @@ Another Paragraph";
 
     #[test]
     fn test_split_ordered_list_marker() {
+        let _census = census::Guard;
         // digits at a line start and a `.` from the next node form a list marker
         html_2md_compare("<p><span>1</span>. foo</p>", "1\\. foo");
         html_2md_compare("<p>1<span>. not a list</span></p>", "1\\. not a list");
@@ -1100,6 +1214,7 @@ Another Paragraph";
 
     #[test]
     fn test_nested_list_under_wide_marker() {
+        let _census = census::Guard;
         // a child list must start at the parent item's content column; at a
         // fixed four columns it sits left of `100. ` and parses as an
         // indented code block
@@ -1113,6 +1228,7 @@ Another Paragraph";
 
     #[test]
     fn test_nested_list_not_starting_at_one() {
+        let _census = census::Guard;
         // an ordered list that doesn't start at 1 can't interrupt a paragraph,
         // so it needs a blank line after the parent item's text
         html_2md_compare(
@@ -1132,6 +1248,7 @@ Another Paragraph";
 
     #[test]
     fn test_nested_list_starting_with_empty_item() {
+        let _census = census::Guard;
         // an empty item can't interrupt a paragraph, and a bare `-` under the
         // parent item's text would make that text a heading
         html_2md_compare(
@@ -1146,6 +1263,7 @@ Another Paragraph";
 
     #[test]
     fn test_nested_list_item_paragraphs() {
+        let _census = census::Guard;
         // a nested item's second paragraph is indented to that item's content
         // column; at the outer item's column it parses as part of the outer item
         html_2md_compare(
@@ -1156,6 +1274,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_code_block() {
+        let _census = census::Guard;
         // every line of the code block is indented to the item's content
         // column; at column zero the fence ends the list
         html_2md_compare(
@@ -1179,6 +1298,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_blockquote() {
+        let _census = census::Guard;
         // every line of the quote is indented to the item's content column;
         // at column zero the quote ends the list
         html_2md_compare(
@@ -1198,6 +1318,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_thematic_break() {
+        let _census = census::Guard;
         html_2md_compare("<ul><li><hr></li><li>two</li></ul>", "- ***\n- two");
         html_2md_compare(
             "<ul><li><p>a</p><hr><p>b</p></li><li>c</li></ul>",
@@ -1240,6 +1361,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_markers_not_rule() {
+        let _census = census::Guard;
         // `- - -` would be a rule, so the nested list starts on the next line
         html_2md_compare(
             "<ul><li><ul><li><ul><li></li></ul></li><li>b</li></ul></li></ul>",
@@ -1250,6 +1372,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_table() {
+        let _census = census::Guard;
         // a table is written as a table, indented to the item's content column
         html_2md_compare(
             "<ul><li><table><tr><th>a</th></tr><tr><td>b</td></tr></table></li><li>c</li></ul>",
@@ -1281,6 +1404,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_empty_first_line() {
+        let _census = census::Guard;
         // a marker then a blank line ends the item, so the first content goes on the marker line
         html_2md_compare("<ul><li><p></p>a</li><li>b</li></ul>", "- a\n- b");
         html_2md_compare("<ul><li><div></div><p>a</p></li></ul>", "- a");
@@ -1308,6 +1432,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_list_in_inline_wrapper() {
+        let _census = census::Guard;
         // inline space can indent a line of text, which then is no line of a nested item
         html_2md_compare(
             "<ul><li><span><dl>a</dl><b> </b></span>k<ol start=\"10\"><li></li></ol></li></ul>",
@@ -1336,6 +1461,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_continuation_lines() {
+        let _census = census::Guard;
         // every line an item's content breaks onto is indented to its content column
         html_2md_compare(
             "<ul><li>a<br><br>b</li><li>c</li></ul>",
@@ -1383,6 +1509,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_tight_after_item_block() {
+        let _census = census::Guard;
         // a blank line after an item's closing code block or quote would make
         // the list loose
         html_2md_compare(
@@ -1411,6 +1538,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_heading() {
+        let _census = census::Guard;
         // the heading keeps its marker, and text after it stays in the item
         html_2md_compare(
             "<ul><li><h1>Foo</h1></li><li><h2>Bar</h2>baz</li></ul>",
@@ -1427,6 +1555,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_nested_blocks() {
+        let _census = census::Guard;
         // blocks inside a `<div>` in an item are written as the item's own blocks
         html_2md_compare(
             "<ul><li><div><p>a</p></div></li><li>two</li></ul>",
@@ -1457,6 +1586,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_nested_blocks_after_inline() {
+        let _census = census::Guard;
         // a block after inline content starts its own indented line
         html_2md_compare("<ul><li>text<div><p>a</p></div></li></ul>", "- text\n\n  a");
         // a heading interrupts the text, so no blank line loosens the list
@@ -1494,6 +1624,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_dl_and_figure() {
+        let _census = census::Guard;
         // blocks nested in a `dl` or `figure` stay in the item
         html_2md_compare(
             "<ul><li><dl><dt>T</dt><dd>D</dd></dl></li><li>next</li></ul>",
@@ -1516,6 +1647,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_nested_blocks_other_wrappers() {
+        let _census = census::Guard;
         html_2md_compare(
             "<ul><li><article><p>a</p><p>b</p></article></li></ul>",
             "- a\n\n  b",
@@ -1546,6 +1678,7 @@ Another Paragraph";
 
     #[test]
     fn test_html5_blocks() {
+        let _census = census::Guard;
         // sectioning and other flow elements are blocks, so their text is not glued
         html_2md_compare(
             "<header>a</header><main>b</main><footer>c</footer>",
@@ -1572,6 +1705,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_nested_blocks_skip_tags() {
+        let _census = census::Guard;
         // an image with a source is a paragraph's visible content
         html_2md_compare(
             r#"<ul><li>a<span><p><img src="i.png"></p></span></li><li>c</li></ul>"#,
@@ -1603,6 +1737,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_text_after_block() {
+        let _census = census::Guard;
         // unindented, the text would end the list and run into the next marker
         html_2md_compare(
             "<ul><li><p>a</p>b <em>c</em></li><li>d</li></ul>",
@@ -1655,6 +1790,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_block_syntax_text() {
+        let _census = census::Guard;
         // text inside a list item that begins with block syntax must be
         // escaped, or it turns the line into a nested construct
         html_2md_compare("<ul><li>1. Preheat oven</li></ul>", "- 1\\. Preheat oven");
@@ -1672,6 +1808,7 @@ Another Paragraph";
 
     #[test]
     fn test_list_item_comment() {
+        let _census = census::Guard;
         // a comment writes nothing, so it must not indent or space the next block
         html_2md_compare("<ul><li><p>a</p><!-- c --><p>b</p></li></ul>", "- a\n\n  b");
         html_2md_compare(
@@ -1690,6 +1827,7 @@ Another Paragraph";
 
     #[test]
     fn test_nbsp_is_not_collapsed() {
+        let _census = census::Guard;
         // HTML collapses only ASCII whitespace; `&nbsp;` is content
         html_2md_compare("<p>a&nbsp;&nbsp;b</p>", "a\u{a0}\u{a0}b");
         html_2md_compare("<p>&nbsp;a&nbsp;</p>", "\u{a0}a\u{a0}");
@@ -1698,6 +1836,7 @@ Another Paragraph";
 
     #[test]
     fn test_paragraphs() {
+        let _census = census::Guard;
         let contents =
             "<p>To create paragraphs, use a blank line to separate one or more lines of text.</p>
         <p>I really like using <span>Markdown</span><span>  text</span>.</p>
@@ -1713,6 +1852,7 @@ Another Paragraph";
 
     #[test]
     fn test_figure() {
+        let _census = census::Guard;
         // a nested figure is still its own block
         html_2md_compare(
             "<figure><p>a</p><figure><figcaption>nested</figcaption></figure></figure>",
@@ -1722,6 +1862,7 @@ Another Paragraph";
 
     #[test]
     fn test_dl() {
+        let _census = census::Guard;
         html_2md_compare(
             "<dl><dt>T1</dt><dd>D1</dd><dt>T2</dt><dd>D2</dd></dl>",
             "T1\n\nD1\n\nT2\n\nD2",
@@ -1736,6 +1877,7 @@ Another Paragraph";
 
     #[test]
     fn test_figure_dl_and_list_siblings() {
+        let _census = census::Guard;
         // the issue's document: no element's text runs into the one before it
         html_2md_compare(
             "<figure><img src=\"a.jpg\" alt=\"b\"><figcaption>Caption here</figcaption></figure>\n\
@@ -1747,6 +1889,7 @@ Another Paragraph";
 
     #[test]
     fn test_links() {
+        let _census = census::Guard;
         let simple_contents = r#"<p>My favorite search engine is <a href="https://duckduckgo.com">Duck Duck Go</a>.</p>"#;
         let simple_expected =
             r"My favorite search engine is [Duck Duck Go](https://duckduckgo.com).";
@@ -1808,6 +1951,7 @@ Another Paragraph";
 
     #[test]
     fn test_inline_markup_in_link() {
+        let _census = census::Guard;
         html_2md_compare(
             r#"<p>See <a href="/api"><code>Vec::new</code></a> and <a href="/x"><em>the guide</em></a>.</p>"#,
             r"See [`Vec::new`](/api) and [*the guide*](/x).",
@@ -1838,6 +1982,7 @@ Another Paragraph";
 
     #[test]
     fn test_bang_before_link_or_image() {
+        let _census = census::Guard;
         // a trailing `!` must not turn the link into image syntax
         html_2md_compare(
             r#"<p>Wow!<a href="https://e.com">x</a></p>"#,
@@ -1866,6 +2011,7 @@ Another Paragraph";
 
     #[test]
     fn test_images() {
+        let _census = census::Guard;
         let simple_contents = r#"<p>Image: <img src="/path/to/img.jpg" alt="Alt text"></p>"#;
         let simple_expected = "Image: ![Alt text](/path/to/img.jpg)";
         html_2md_compare(simple_contents, simple_expected);
@@ -1889,6 +2035,7 @@ Another Paragraph";
 
     #[test]
     fn test_img_src_fallbacks() {
+        let _census = census::Guard;
         // lazy-load pages carry the image URL in srcset or data-src
         html_2md_compare(
             "<p><img srcset=\"https://i.e.com/p.png 1x, https://i.e.com/p2x.png 2x\" alt=\"pic\"></p>",
@@ -1919,6 +2066,7 @@ Another Paragraph";
 
     #[test]
     fn test_whitespace_only_link() {
+        let _census = census::Guard;
         html_2md_compare(
             "<h2>VMAF <a href=\"#vmaf\"> </a></h2><p>body</p>",
             "## VMAF\n\nbody",
@@ -1931,6 +2079,7 @@ Another Paragraph";
 
     #[test]
     fn test_linked_image() {
+        let _census = census::Guard;
         // an image wrapped in a link must become the link body, not be dropped
         html_2md_compare(
             r#"<p><a href="https://e.com"><img src="https://i.e.com/p.png" alt="pic"></a></p>"#,
@@ -1952,6 +2101,7 @@ Another Paragraph";
 
     #[test]
     fn test_link_wrapping_blocks() {
+        let _census = census::Guard;
         // a blank line inside `[...]` ends the paragraph and breaks the link
         html_2md_compare(
             "<a href=\"/post\"><img src=\"a.jpg\" alt=\"i\"><h3>Title</h3><p>Blurb</p></a>",
@@ -2060,6 +2210,7 @@ Another Paragraph";
 
     #[test]
     fn test_link_destination_and_alt_escaping() {
+        let _census = census::Guard;
         // balanced parens need no escaping
         html_2md_compare(
             "<p><a href=\"https://e.com/x(y)z\">x</a></p>",
@@ -2127,6 +2278,7 @@ Another Paragraph";
 
     #[test]
     fn test_pre_code() {
+        let _census = census::Guard;
         let simple_contents = "<pre>\
 <span>fn</span> <span>main</span><span>()</span><span> </span><span>{</span>\n\
 <span>    </span><span>println!</span><span>(</span><span>\"Hello, World!\"</span><span>);</span>\n\
@@ -2142,6 +2294,7 @@ fn main() {
 
     #[test]
     fn test_pre_code_with_data_lang_attribute() {
+        let _census = census::Guard;
         let simple_contents = "<pre data-lang=\"rust\">\
 <span>fn</span> <span>main</span><span>()</span><span> </span><span>{</span>\n\
 <span>    </span><span>println!</span><span>(</span><span>\"Hello, World!\"</span><span>);</span>\n\
@@ -2157,6 +2310,7 @@ fn main() {
 
     #[test]
     fn test_pre_code_with_data_lang_attribute_in_parent_tag() {
+        let _census = census::Guard;
         let simple_contents = "<div data-lang=\"rust\"><pre>\
 <span>fn</span> <span>main</span><span>()</span><span> </span><span>{</span>\n\
 <span>    </span><span>println!</span><span>(</span><span>\"Hello, World!\"</span><span>);</span>\n\
@@ -2172,6 +2326,7 @@ fn main() {
 
     #[test]
     fn test_pre_code_with_language_css_class_in_child_code_tag() {
+        let _census = census::Guard;
         let contents = "<pre><code class=\"language-rust something else\">\
 <span>fn</span> <span>main</span><span>()</span><span> </span><span>{</span>\n\
 <span>    </span><span>println!</span><span>(</span><span>\"Hello, World!\"</span><span>);</span>\n\
@@ -2187,6 +2342,7 @@ fn main() {
 
     #[test]
     fn test_pre_code_language_keeps_info_string_chars() {
+        let _census = census::Guard;
         html_2md_compare(
             "<pre><code class=\"language-föö\">x</code></pre>",
             "```föö\nx\n```",
@@ -2209,17 +2365,20 @@ fn main() {
 
     #[test]
     fn test_pre_empty() {
+        let _census = census::Guard;
         html_2md_compare("<pre><code></code></pre>", "```\n```");
     }
 
     #[test]
     fn test_pre_several_text_nodes() {
+        let _census = census::Guard;
         html_2md_compare("<pre>a<b>b</b></pre>", "```\nab\n```");
         html_2md_compare("<pre><b></b>a<br>b</pre>", "```\na\nb\n```");
     }
 
     #[test]
     fn test_pre_with_br() {
+        let _census = census::Guard;
         // highlighters and CMSs break lines with `<br>` instead of newlines
         html_2md_compare(
             "<pre><code><span>a</span><br><span>b</span><br><br>c</code></pre>",
@@ -2231,6 +2390,7 @@ fn main() {
 
     #[test]
     fn test_blockquote() {
+        let _census = census::Guard;
         let simple_contents = "<blockquote><p>Quoted text</p></blockquote>";
         let simple_expected = "> Quoted text";
         html_2md_compare(simple_contents, simple_expected);
@@ -2270,6 +2430,7 @@ The wind is passing by.
 
     #[test]
     fn test_inline_blockquote() {
+        let _census = census::Guard;
         let contents = "<blockquote>
 <p>
 Who has seen the wind?<br>
@@ -2300,6 +2461,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_alignment() {
+        let _census = census::Guard;
         // the header cell's `text-align` style or `align` attribute aligns its column
         let contents = r#"<table><tr><th style="text-align: center">abc</th><th align="right">def</th><th>g</th><th style="color: red; text-align: left">h</th></tr><tr><td>1</td><td>2</td><td>3</td><td>4</td></tr></table>"#;
         html_2md_compare(
@@ -2345,6 +2507,7 @@ The wind is passing by.
 
     #[test]
     fn test_table() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr>
         <th>Column 1</th>
@@ -2372,6 +2535,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_caption() {
+        let _census = census::Guard;
         html_2md_compare(
             "<table><caption><b>B</b> <a href=\"/u\">l</a></caption><tr><th>h</th></tr><tr><td>x</td></tr></table>",
             "**B** [l](/u)\n\n| h |\n| - |\n| x |",
@@ -2402,6 +2566,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_inside_table() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr>
         <td>
@@ -2434,6 +2599,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_inside_table_rows() {
+        let _census = census::Guard;
         // a table holding a table is written as text, even when its rows would make a valid table
         html_2md_compare(
             "<table><tr><td>a</td><td><table><tr><td>x</td><td>y</td></tr></table></td></tr></table>",
@@ -2448,6 +2614,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_without_headings() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr>
         <td>R 1, <i>C 1</i></td>
@@ -2469,6 +2636,7 @@ The wind is passing by.
 
     #[test]
     fn test_table_skip() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr>
         <td>R 1, <i>C 1</i></td>
@@ -2527,6 +2695,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_select_options() {
+        let _census = census::Guard;
         // options stay apart from each other and from the text around the `<select>`
         html_2md_compare(
             "<p>Sort:<select><option>One</option><option>Two</option></select>now</p>",
@@ -2633,6 +2802,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_empty() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr></tr>
     <tr></tr>
@@ -2643,6 +2813,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_with_list() {
+        let _census = census::Guard;
         let contents = "<table>
     <tr>
         <td>1</td>
@@ -2661,6 +2832,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_cell_blocks() {
+        let _census = census::Guard;
         // text after a list starts its own cell line
         html_2md_compare(
             "<table><tr><td><ul><li>a</li></ul>y</td></tr></table>",
@@ -2704,6 +2876,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_cell_pre() {
+        let _census = census::Guard;
         // a fence would split the row and swallow the rest of the document
         html_2md_compare(
             "<table><tr><th>H</th></tr><tr><td>a<pre>x | y\n\n  z</pre>b</td></tr></table><p>c</p>",
@@ -2723,6 +2896,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_cell_trailing_br() {
+        let _census = census::Guard;
         html_2md_compare(
             "<table><tr><th>a</th></tr><tr><td>x<br></td></tr></table>",
             "| a |\n| - |\n| x |",
@@ -2746,6 +2920,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_cell_blockquote() {
+        let _census = census::Guard;
         // `>` lines would split the row; the quote's blocks are joined like other cell blocks
         html_2md_compare(
             "<table><tr><th>h</th></tr><tr><td><blockquote>q</blockquote>x</td></tr></table>",
@@ -2764,6 +2939,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_row_headers() {
+        let _census = census::Guard;
         // a `th` beside a `td` labels its row, it isn't a column heading
         let contents = "<table>
     <tr><th>Lib</th><th>First</th></tr>
@@ -2783,6 +2959,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_headings_after_empty_row() {
+        let _census = census::Guard;
         // the header row is the first row that has cells
         let contents = "<table>
     <tr></tr>
@@ -2794,12 +2971,14 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_only_headings() {
+        let _census = census::Guard;
         let contents = "<table><tr><th>a</th><th>b</th></tr></table>";
         html_2md_compare(contents, "| a | b |\n| - | - |");
     }
 
     #[test]
     fn test_table_empty_th() {
+        let _census = census::Guard;
         let contents = "<table>
         <tr>
             <th></th>
@@ -2816,6 +2995,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_table_cell_escape() {
+        let _census = census::Guard;
         // code with unescaped pipe, link with unescaped pipe
         let contents = r#"<table>
             <tr>
@@ -2873,6 +3053,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_skip_tags_default() {
+        let _census = census::Guard;
         // By default, formatter will skip ["script", "style", "meta", "head"]
         let contents = "
         <style>p {color: blue;}</style>
@@ -2888,6 +3069,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_skip_tags() {
+        let _census = census::Guard;
         // If you need all text content of the elements, you need to pass Some(&vec![]) to `md`.
         // If you pass a structure like this into `Document::from`, the html5ever will create html > head > style.
         // If you want to preserve order use `Document::fragment`.
@@ -2908,6 +3090,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_text_after_list() {
+        let _census = census::Guard;
         // on the next line the text would continue the last item
         html_2md_compare("<ul><li>a</li></ul>b", "- a\n\nb");
         html_2md_compare(
@@ -2922,6 +3105,7 @@ R 2, *C 1* R 2, *C 2*";
     }
     #[test]
     fn test_linebreak_after_lists() {
+        let _census = census::Guard;
         let contents = r"Influenced
         <ul>
          <li>Idris (programming language)</li>
@@ -2947,6 +3131,7 @@ R 2, *C 1* R 2, *C 2*";
 
     #[test]
     fn test_pre_code_without_new_line() {
+        let _census = census::Guard;
         let simple_contents = r#"<pre>
 <span>fn</span> <span>main</span><span>()</span><span> </span><span>{</span>
 <span>    </span><span>println!</span><span>(</span><span>"Hello, World!"</span><span>);</span>
@@ -2961,6 +3146,7 @@ fn main() {
 
     #[test]
     fn test_pre_with_interior_backticks() {
+        let _census = census::Guard;
         // A fenced block whose content contains a fence-length backtick line
         // would terminate at that line; the fence must be longer than any
         // interior backtick run (CommonMark §fenced-code-blocks).
@@ -2974,6 +3160,7 @@ fn main() {
 
     #[test]
     fn test_empty_and_adjacent_code_spans() {
+        let _census = census::Guard;
         // an empty code element writes nothing, instead of a stray backtick run
         html_2md_compare("<p>a<code></code>b</p>", "ab");
         // a whitespace-only one is a valid code span
@@ -2992,6 +3179,7 @@ fn main() {
 
     #[test]
     fn test_code_span_with_elements() {
+        let _census = census::Guard;
         // markup inside a code span has no meaning: nested elements give
         // their raw text, without backslash escapes or extra backticks
         html_2md_compare("<p><code><code>x</code></code></p>", "`x`");
@@ -3005,6 +3193,7 @@ fn main() {
 
     #[test]
     fn test_deeply_nested_code() {
+        let _census = census::Guard;
         // each level used to rewrap the inner span in a longer fence, so
         // time was cubic and output quadratic in the depth; the exact output
         // pins both, without a wall-clock bound that could flake in CI
@@ -3021,6 +3210,7 @@ fn main() {
 
     #[test]
     fn test_deeply_nested_handled_elements() {
+        let _census = census::Guard;
         // each handled element took a native stack frame, so deep nesting
         // overflowed the stack; the tree is built bottom-up as parsing is slow
         const DEPTH: usize = 5_000;
@@ -3048,6 +3238,7 @@ fn main() {
 
     #[test]
     fn test_list_item_with_deep_inline_content() {
+        let _census = census::Guard;
         // checking a list item for visible text recursed per element level
         const DEPTH: usize = 20_000;
         let doc = Document::from("<ul><li>a<ul><li></li></ul></li></ul>");
@@ -3063,7 +3254,106 @@ fn main() {
     }
 
     #[test]
+    fn test_sweep_content_kept() {
+        // shapes from a differential sweep against the old serializer; kept out of the census
+        let md = |h: &str| serialize_md(&Document::from(h).root(), false, None).to_string();
+        let cases = [
+            // a container that writes nothing still separates the text around it
+            ("<ul><li>y</li>q<ul></ul><li>a</li></ul>", "- y\nq\n\n- a"),
+            ("q<blockquote></blockquote>x", "q\n\nx"),
+            ("<em>q<ul></ul>1.</em>", "<em>\n\nq\n\n1\\.\n\n</em>"),
+            // content directly in a list writes its own children, not itself again
+            (
+                "<ul><em><ul><li>q</li></ul></em></ul>",
+                "<em>\n\n- q\n\n</em>",
+            ),
+            (
+                "<ul><b><i>q</i><ul><li>a</li></ul></b></ul>",
+                "<strong>\n\n*q*\n\n- a\n\n</strong>",
+            ),
+            (
+                "<ul><li><i><li></li></i><b><i>q</i>word</b>1.</li></ul>",
+                "-\n-\n***q*word**1.",
+            ),
+            // a list in a heading is plain content and leaves the item's end alone
+            ("<ul><h3><ol></ol></h3><li></li></ul>", "###\n\n-"),
+            (
+                "<ol start=\"3\"><li><h3><ol><li></li></ol></h3></li>- <li>x</li></ol>",
+                "3. ###\n\\-\n\n4. x",
+            ),
+            // escaped or not, a delimiter char in the text is punctuation
+            ("q<b>*</b>", "q<strong>\\*</strong>"),
+            // a rule in a cell is text; `---` under a text line would underline it
+            (
+                "<table><tr><td><hr></td></tr></table>",
+                "|   |\n| - |\n| --- |",
+            ),
+            ("<ul><li>a<div><hr></div></li></ul>", "- a\n\n  ---"),
+            // a boundary before markup is a space
+            (
+                "<select><option>q</option></select><img src=\"i.png\" alt=\"al\">",
+                "q ![al](i.png)",
+            ),
+            // a block at a code span's edge in link text sets the link off
+            (
+                "y z<a href=\"/u\"><code><div></div>x</code></a>",
+                "y z\n\n[`x`](/u)",
+            ),
+            // text ending loose content takes the text rule before an empty member
+            (
+                "<ul><li><span><li>w</li></span><li></li><i>x<li></li></i></li><li></li></ul>",
+                "-\n- w\n-\n*x*\n\n-",
+            ),
+            // a table written as text is a block, also inside emphasis
+            (
+                "<em><table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>q</em>",
+                "<em>\n\na b  \nc\n\nq\n\n</em>",
+            ),
+        ];
+        for (html, expected) in cases {
+            assert_eq!(md(html), expected, "{html}");
+        }
+    }
+
+    #[test]
+    fn test_emphasis_turns_to_html_once() {
+        // a run turns to html tags while containers and runs inside it are still open
+        let md = |h: &str| serialize_md(&Document::from(h).root(), false, None).to_string();
+        let cases = [
+            (
+                "<b><del><hr><p></p></del></b>",
+                "<strong>\n\n<del>\n\n---\n\n</del>\n\n</strong>",
+            ),
+            // an empty link rolls back the block it resolved: the run keeps its delimiters
+            (
+                "<em><table></table><a href=\"/u\"></a>x<ul><li>a</li></ul></em>",
+                "<em>\n\nx\n\n- a\n\n</em>",
+            ),
+            (
+                "<del>q<i><p>a</p><h1>b</h1></i></del>",
+                "<del>\n\nq\n\n<em>\n\na\n\n# b\n\n</em>\n\n</del>",
+            ),
+            (
+                "<em>a<blockquote>b<ul><li>c<strong>d<ul><li>e</li></ul></strong></li></ul></blockquote></em>",
+                "<em>\n\na\n\n> b\n> \n> - c\n> \n>   <strong>\n> \n>   d\n>     - e\n> \n>   </strong>\n\n</em>",
+            ),
+            (
+                "<em>x<a href=\"/u\">y<blockquote>z</blockquote></a><ul><li>w</li></ul></em>",
+                "<em>\n\nx[y z](/u)\n\n- w\n\n</em>",
+            ),
+        ];
+        for (html, expected) in cases {
+            assert_eq!(md(html), expected, "{html}");
+        }
+        // each level used to write its subtree twice: 2^200 walks
+        let unit = "<blockquote>w<ul><li>w<em>w<a href=/u>w";
+        let html = unit.repeat(200) + &"</a></em></li></ul></blockquote>".repeat(200);
+        assert!(md(&html).contains("<em>"));
+    }
+
+    #[test]
     fn test_list_item_block_in_deep_wrappers() {
+        let _census = census::Guard;
         // writing a block nested in many wrappers must not recurse per wrapper
         const DEPTH: usize = 40_000;
         let doc = Document::from("<ul><li>a<div>b</div></li></ul>");
@@ -3081,6 +3371,7 @@ fn main() {
 
     #[test]
     fn test_nesting_past_limit_writes_content() {
+        let _census = census::Guard;
         // past the limit an element is written as its plain content
         let depth = constants::MAX_NESTING + 1;
         let html = format!(
@@ -3107,6 +3398,7 @@ fn main() {
 
     #[test]
     fn test_pre_with_trailing_newline() {
+        let _census = census::Guard;
         // the content's final newline must not become an extra empty line
         let md = "```\na\nb\n```";
         html_2md_compare("<pre>a\nb\n</pre>", md);
@@ -3114,6 +3406,7 @@ fn main() {
 
     #[test]
     fn test_emphasis_boundary_whitespace() {
+        let _census = census::Guard;
         // CommonMark requires an opening delimiter to be followed, and a closing
         // delimiter to be preceded, by a non-whitespace character. Whitespace
         // staying inside the delimiter run renders as literal `**`/`*`.
@@ -3164,6 +3457,7 @@ fn main() {
 
     #[test]
     fn test_strikethrough() {
+        let _census = census::Guard;
         html_2md_compare("<p><del>Hi</del> Hello</p>", "~~Hi~~ Hello");
         html_2md_compare("<p>a<s>b</s>c</p>", "a~~b~~c");
         html_2md_compare("<p><strike> x </strike>y</p>", "~~x~~ y");
@@ -3180,6 +3474,7 @@ fn main() {
 
     #[test]
     fn test_emphasis_next_to_punctuation() {
+        let _census = census::Guard;
         // a `*` run that can't open or close by the flanking rules is written as html
         html_2md_compare("<p><em>a.</em>b</p>", "<em>a.</em>b");
         html_2md_compare("<p>x<em>(a)</em></p>", "x<em>(a)</em>");
@@ -3290,6 +3585,7 @@ fn main() {
 
     #[test]
     fn test_nested_same_type_emphasis() {
+        let _census = census::Guard;
         // an element nested in one of the same type writes no delimiters:
         // `<i><i>b</i></i>` is one emphasis, not `**b**` (strong)
         html_2md_compare("<p><i><i>b</i></i></p>", "*b*");
@@ -3322,6 +3618,7 @@ fn main() {
 
     #[test]
     fn test_emphasis_around_block() {
+        let _census = census::Guard;
         html_2md_compare("<em><p>a</p></em>", "*a*");
         html_2md_compare("<p>x</p><b><p>a</p><p>b</p></b>", "x\n\n**a**\n\n**b**");
         html_2md_compare("<del><div><p>a</p></div></del>", "~~a~~");
@@ -3370,6 +3667,7 @@ fn main() {
 
     #[test]
     fn test_emphasis_around_nested_block() {
+        let _census = census::Guard;
         // a list that writes nothing adds no line break, so the emphasis stays inline
         html_2md_compare("<ul><li><em>a<br><ul></ul></em></li></ul>", "- *a*");
         // the block starts at the list's offset, not at the indent of a child block

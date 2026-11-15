@@ -6,23 +6,24 @@ use html5ever::local_name;
 use crate::node::{NodeData, TreeNode, ancestor_nodes, child_nodes, descendant_nodes};
 use crate::{Element, NodeId};
 
+use super::super::block::is_link_block;
 use super::super::constants::{CODE_LANGUAGE_ATTRIBUTES, CODE_LANGUAGE_PREFIX};
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
-use super::super::text_utils::{push_block_space, push_escaped_pipes, trim_trailing_space};
-use super::table::add_cell_block_break;
+use super::super::text_utils::push_escaped_pipes;
+use super::super::writer::{End, MdWriter, Sep, Start};
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    text: &mut String,
+    w: &mut MdWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
 ) {
     if el.name.local == local_name!("pre") {
-        write_pre(h, text, id, opts);
+        write_pre(h, w, id, opts);
     } else {
-        write_code(h, text, id, opts);
+        write_code(h, w, id, opts);
     }
 }
 
@@ -59,30 +60,33 @@ fn find_code_language_css_class<H: MDHost>(h: &H, id: NodeId) -> Option<String> 
 
 /// Transforms a `<pre>` code block, possibly with an associated language label that the resulting
 /// block is annotated with.
-fn write_pre<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) {
+fn write_pre<H: MDHost>(h: &H, w: &mut MdWriter, id: NodeId, opts: FormatOpts) {
     let nodes = h.nodes();
     let content = pre_text(&nodes, id);
 
     // a fence cannot go in link text; a code span keeps the text on one line
     if opts.link_body {
         let code_text = content.split_ascii_whitespace().collect::<Vec<_>>();
-        push_block_space(text);
-        push_code_text(text, &code_text.join(" "), opts.table_cell);
-        // only a following sibling needs a separator; no trailing space ends the label
-        if h.tree().next_sibling_of(&id).is_some() {
-            push_block_space(text);
+        w.join();
+        if let Some(text) = code_text.first().map(|_| w.raw('`')) {
+            push_code_text(text, &code_text.join(" "), opts.table_cell);
         }
+        // only a following sibling needs a separator; no trailing space ends the label
+        w.join();
         return;
     }
 
     // a cell cannot hold a fence; each line becomes a code span, joined like cell blocks
     if opts.table_cell {
-        add_cell_block_break(text, "<br>");
+        let mut buf = h.scratch();
         // a lone `\r` (possible via the DOM API) is a line ending too and would end the row
         for line in content.lines().flat_map(|l| l.split('\r')) {
-            push_code_text(text, line, true);
-            text.push_str("<br>");
+            push_code_text(&mut buf, line, true);
+            buf.push_str("<br>");
         }
+        w.open_block(Start::Text, Sep::Line);
+        w.inline(buf.trim_end_matches("<br>"));
+        w.close_block(End::Text, Sep::Line);
         return;
     }
 
@@ -90,28 +94,20 @@ fn write_pre<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) 
     // otherwise an interior fence-length line terminates the block early
     // (CommonMark §fenced-code-blocks).
     let fence_len = max_backtick_run(&content).max(2) + 1;
-
-    // a fence interrupts a paragraph, so one line break is enough
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
+    let mut text = h.scratch();
     text.extend(std::iter::repeat_n('`', fence_len));
-
     if let Some(lang) = find_code_language(h, id) {
         text.push_str(&lang);
     }
     text.push('\n');
-
     text.push_str(&content);
-
     // The closing fence goes on its own line; a final newline of the
     // content already ends the last line, and empty content has no line.
     if !content.is_empty() && !content.ends_with('\n') {
         text.push('\n');
     }
-
     text.extend(std::iter::repeat_n('`', fence_len));
-    text.push('\n');
+    w.block(&text, Start::Block, Sep::Line, End::Closed, Sep::Line);
 }
 
 /// The text of a `<pre>` block, with each `<br>` as a line break.
@@ -153,7 +149,7 @@ fn edge_line_breaks<H: MDHost>(h: &H, id: NodeId) -> (bool, bool) {
 /// Writes the content of the `<code>` block. Generally a `<code>` tag is used inline, but unfortunately
 /// it's also used instead of a `<pre>` block. In case the `<code>` block contains multiline
 /// text, it's handled as a `<pre>` code block.
-fn write_code<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) {
+fn write_code<H: MDHost>(h: &H, w: &mut MdWriter, id: NodeId, opts: FormatOpts) {
     let is_multiline = {
         let nodes = h.nodes();
         descendant_nodes(Ref::clone(&nodes), &id)
@@ -166,29 +162,71 @@ fn write_code<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts)
     };
 
     if is_multiline {
-        return write_pre(h, text, id, opts);
+        return write_pre(h, w, id, opts);
     }
 
     // edge spaces are content, so keep them; whitespace around a line
     // break at an edge is source indentation
     let (starts_with_break, ends_with_break) = edge_line_breaks(h, id);
-    let mut code_text = String::new();
-    h.write(
-        &mut code_text,
-        id,
-        FormatOpts::new()
-            .include_node()
-            .inline()
-            .skip_escape()
-            .skip_md(),
-    );
+    // in link text, a block at the span's edge sets it off as a `<pre>` there is
+    let (block_start, block_end) = if opts.link_body {
+        block_edges(h, id)
+    } else {
+        (false, false)
+    };
+    if block_start {
+        w.join();
+    }
+    let code_opts = FormatOpts::new().inline().skip_escape().skip_md();
+    w.push_capture(code_opts, false);
+    h.write_to(w, id, code_opts);
+    let cap = w.pop_capture();
+    // its edge spaces are code
+    let mut code = h.scratch();
+    cap.lead.push_kept(&mut code);
+    code.push_str(&cap.text);
+    cap.trail.push_kept(&mut code);
+    w.recycle(cap.text);
+    let mut code = code.as_str();
     if ends_with_break {
-        trim_trailing_space(&mut code_text);
+        code = code.trim_end_matches(' ');
     }
     if starts_with_break {
-        code_text.drain(..code_text.len() - code_text.trim_start_matches(' ').len());
+        code = code.trim_start_matches(' ');
     }
-    push_code_text(text, &code_text, opts.table_cell);
+    if code.is_empty() {
+        return;
+    }
+    let out = w.raw('`');
+    if opts.table_cell && code.contains('|') {
+        push_code_text(out, code, true);
+    } else {
+        let start = out.len();
+        out.push_str(code);
+        wrap_code_text(out, start);
+    }
+    if block_end {
+        w.join();
+    }
+}
+
+fn block_edges<H: MDHost>(h: &H, id: NodeId) -> (bool, bool) {
+    let nodes = h.nodes();
+    let edge = |rev: bool| {
+        let mut cur = id;
+        loop {
+            let mut kids = child_nodes(Ref::clone(&nodes), &cur, rev).filter(|c| {
+                !matches!(&nodes[c.value()].data, NodeData::Text { contents } if contents.trim().is_empty())
+            });
+            let Some(k) = kids.next() else { return false };
+            match &nodes[k.value()].data {
+                NodeData::Element(e) if is_link_block(&e.name) => return true,
+                NodeData::Element(_) => cur = k,
+                _ => return false,
+            }
+        }
+    };
+    (edge(false), edge(true))
 }
 
 fn find_code_lang_attribute(node: &TreeNode) -> Option<String> {
@@ -220,29 +258,54 @@ fn max_backtick_run(text: &str) -> usize {
     max
 }
 
-fn push_code_text(text: &mut String, code_text: &str, in_cell: bool) {
-    if code_text.is_empty() {
-        return;
+/// Wraps the code text written from `start` in its fence.
+fn wrap_code_text(text: &mut String, start: usize) {
+    let (fence_len, needs_space) = fence(&text[start..]);
+    let sep = needs_sep(&text[..start]);
+    if needs_space {
+        text.push(' ');
+        text.insert(start, ' ');
     }
-
-    // a code span right before would merge its closing run with this
-    // opening one: `x` and `y` would give `x``y`, a single span
-    if let Some(before) = text.strip_suffix('`') {
-        // an escaped backtick is text, which a code span never ends with (see below)
-        if before.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0 {
-            text.push(' ');
-        }
+    text.extend(std::iter::repeat_n('`', fence_len));
+    for _ in 0..fence_len {
+        text.insert(start, '`');
     }
+    if sep {
+        text.insert(start, ' ');
+    }
+}
 
-    let fence_len = max_backtick_run(code_text) + 1;
+/// A code span right before would merge its closing run with this opening one:
+/// `x` and `y` would give `x``y`, a single span.
+fn needs_sep(before: &str) -> bool {
+    // an escaped backtick is text, which a code span never ends with (see below)
+    before
+        .strip_suffix('`')
+        .is_some_and(|b| b.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0)
+}
+
+/// The fence length for `code_text`, and whether a space pads it inside the fence.
+fn fence(code_text: &str) -> (usize, bool) {
     let bytes = code_text.as_bytes();
-    // a backtick at either edge would merge into the fence, a trailing backslash would pass for an
-    // escaped backtick before a next span, and a parser strips one space from each side of ` a `
+    // a backtick at either edge would merge into the fence, a trailing backslash would pass
+    // for an escaped backtick before a next span, and a parser strips one space from each
+    // side of ` a `
     let needs_space = bytes.first() == Some(&b'`')
         || matches!(bytes.last(), Some(b'`' | b'\\'))
         || (bytes.first() == Some(&b' ')
             && bytes.last() == Some(&b' ')
             && bytes.iter().any(|&b| b != b' '));
+    (max_backtick_run(code_text) + 1, needs_space)
+}
+
+fn push_code_text(text: &mut String, code_text: &str, in_cell: bool) {
+    if code_text.is_empty() {
+        return;
+    }
+    if needs_sep(text) {
+        text.push(' ');
+    }
+    let (fence_len, needs_space) = fence(code_text);
 
     text.extend(std::iter::repeat_n('`', fence_len));
     if needs_space {

@@ -849,9 +849,8 @@ impl BlockWriter {
         }
     }
 
-    /// What the hard breaks owed (`run_break`: one more at a run's start) make of `sep` before
-    /// content starting as `start`: two end the paragraph, unless they end an item's content; one
-    /// replaces a space; before a cell's first text they are kept as content.
+    /// `sep` after the breaks owed (`run_break`: one more), before `start`: two end the paragraph
+    /// unless they end an item's content, one replaces a space, a cell's first text keeps them.
     fn breaks_before(&self, sep: Separator, start: BlockStart, run_break: bool) -> Separator {
         let breaks = self.inline.breaks() + usize::from(run_break);
         if breaks == 0 || (self.opts.table_cell && self.lines.as_str().is_empty()) {

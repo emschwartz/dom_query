@@ -110,8 +110,8 @@ enum Op {
     Close(NodeId, bool),
 }
 
-/// A boundary that keeps words apart: a block in code (md skipped), an option or svg elsewhere.
-fn is_separator(name: &QualName, opts: FormatOpts) -> bool {
+/// A word boundary: a block in code (md skipped), an option or svg elsewhere.
+fn is_word_boundary(name: &QualName, opts: FormatOpts) -> bool {
     if opts.skip_md {
         is_link_block(name)
     } else {
@@ -179,8 +179,8 @@ impl MDHost for MDSerializer<'_> {
                                 continue;
                             }
                             let block = is_link_block(&e.name);
-                            if is_separator(&e.name, opts) {
-                                out.push(Inline::Separator);
+                            if is_word_boundary(&e.name, opts) {
+                                out.push(Inline::WordBoundary);
                             }
                             if !opts.skip_md {
                                 if block {
@@ -202,8 +202,8 @@ impl MDHost for MDSerializer<'_> {
                         continue;
                     };
                     let name = &name.name;
-                    if is_separator(name, opts) {
-                        out.push(Inline::Separator);
+                    if is_word_boundary(name, opts) {
+                        out.push(Inline::WordBoundary);
                     }
                     if block || name.local == local_name!("br") {
                         close_element(out, name, opts);

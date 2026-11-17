@@ -3,6 +3,9 @@ use std::borrow::Cow;
 
 use super::ctx::FormatOpts;
 
+/// A `line` for `push_normalized_text` that `text` never reaches: no word is at a line start.
+pub(super) const NEVER_AT_LINE_START: usize = usize::MAX;
+
 /// Pushes the words of `new_text`, escaped; `line` is where the last line of `text` starts.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn push_normalized_text(
@@ -249,7 +252,7 @@ pub(super) fn push_title(text: &mut String, title: &str) {
         push_normalized_text(&mut normalized, 0, title, FormatOpts::new());
         text.push_str(&normalized.replace('"', "\\\""));
     } else {
-        push_normalized_text(text, usize::MAX, title, FormatOpts::new());
+        push_normalized_text(text, NEVER_AT_LINE_START, title, FormatOpts::new());
     }
     text.push('"');
 }

@@ -28,7 +28,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         // a block in it writes nothing but still owes its space
         out.owe(writer.owed().min(Separator::Space));
         out.push(Inline::Text(label.text, FormatOpts::new()));
-        // with no text, this only passes on its separators
+        // with no text, this only passes on its word boundaries
         let label = Fragment { text: "", ..label };
         out.push(Inline::Link {
             label,

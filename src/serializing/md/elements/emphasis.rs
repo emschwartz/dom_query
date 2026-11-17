@@ -2,7 +2,7 @@ use html5ever::{QualName, local_name};
 
 use crate::{Element, NodeId};
 
-use super::super::block::{Block, BlockStart, BlockWriter, Paragraph, Separator};
+use super::super::block::{Block, BlockStart, BlockWriter, EmphasisParagraph, Separator};
 use super::super::ctx::{EmphasisScope, FormatOpts};
 use super::super::host::MDHost;
 use super::super::inline::Inline;
@@ -57,16 +57,16 @@ impl Emphasis {
     }
 
     /// Whether delimiters fit around `content`, past its nested ones, between source chars `before`
-    /// and `after` (`None`: an edge); `joined`: the opener extends the closing run just before it.
+    /// and `after` (`None`: an edge); `touching`: the opener touches a closing delimiter before it.
     pub(in crate::serializing::md) fn fits(
         self,
         before: Option<char>,
-        joined: bool,
+        touching: bool,
         content: &str,
         after: Option<char>,
     ) -> bool {
         let delim = self.delimiter();
-        if fuses_ambiguously(joined, content, delim) {
+        if fuses_ambiguously(touching, content, delim) {
             return false;
         }
         let first = content.trim_start_matches(delim).chars().next();
@@ -100,23 +100,23 @@ impl Emphasis {
 
 /// Whether a delimiter can close between `last` and `after`.
 fn closes(last: char, after: Option<char>) -> bool {
-    last.is_alphanumeric() || after.is_none_or(is_flanking_safe)
+    last.is_alphanumeric() || after.is_none_or(is_space_or_punctuation)
 }
 
 /// Whether a delimiter can open between `before` and `first`.
 fn opens(before: Option<char>, first: char) -> bool {
-    first.is_alphanumeric() || before.is_none_or(is_flanking_safe)
+    first.is_alphanumeric() || before.is_none_or(is_space_or_punctuation)
 }
 
 /// Whether a delimiter opening `content` would fuse with a nested one, or with a closing one
-/// before it (`joined`), into a run that a delimiter inside `content` closes early.
-fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
-    if !joined && !content.starts_with(delim) {
+/// before it (`touching`), into a run that a delimiter inside `content` closes early.
+fn fuses_ambiguously(touching: bool, content: &str, delim: char) -> bool {
+    if !touching && !content.starts_with(delim) {
         return false;
     }
-    // unjoined, the first run closes the nested one: its length can't be a multiple of 3 with
-    // the fused opener's, so it can't close the outer run (`***a**b*`)
-    let (mut prev, mut escaped, mut first_run) = (None, false, !joined);
+    // not touching, the first run closes the nested one: its length can't be a multiple of 3
+    // with the fused opener's, so it can't close the outer run (`***a**b*`)
+    let (mut prev, mut escaped, mut first_run) = (None, false, !touching);
     // `prev` is a literal, so a delimiter after it starts a run
     let mut prev_escaped = false;
     let mut chars = content.chars();
@@ -142,7 +142,7 @@ fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
 fn opens_and_closes(before: char, after: char) -> bool {
     !before.is_whitespace()
         && !after.is_whitespace()
-        && is_flanking_safe(before) == is_flanking_safe(after)
+        && is_space_or_punctuation(before) == is_space_or_punctuation(after)
 }
 
 /// Whether the delimiters of runs nested at the end of `left` and the start of `right`
@@ -252,7 +252,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         out.owe(Separator::BlankLine);
     } else {
         // a stray `<li>` starts a line of its own inside the run too
-        out.owe(run.lead());
+        out.owe(run.owed_before());
         out.push(Inline::Emphasis { kind, content });
         out.owe(run.owed());
     }
@@ -260,7 +260,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 }
 
 /// Writes a paragraph kept apart as a run of its own, set off as it was.
-fn write_paragraph(out: &mut BlockWriter, kind: Emphasis, p: &Paragraph) {
+fn write_paragraph(out: &mut BlockWriter, kind: Emphasis, p: &EmphasisParagraph) {
     let para = p.start == BlockStart::Para;
     if para {
         out.open_paragraph();
@@ -311,7 +311,7 @@ const PUNCTUATION: &[(char, char)] = &[
 
 /// Whitespace or punctuation. The spec's Unicode whitespace is `Zs`, tab, LF, FF and CR, so
 /// unlike `char::is_whitespace` it leaves out U+000B, U+0085, U+2028 and U+2029.
-fn is_flanking_safe(c: char) -> bool {
+fn is_space_or_punctuation(c: char) -> bool {
     (c.is_whitespace() && !matches!(c, '\u{b}' | '\u{85}' | '\u{2028}' | '\u{2029}'))
         || c.is_ascii_punctuation()
         || !c.is_alphanumeric() && PUNCTUATION.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))

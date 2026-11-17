@@ -218,15 +218,16 @@ pub(super) enum LinePrefix {
     },
 }
 
-/// A paragraph of a writer that keeps paragraphs apart, and how it was set off.
-pub(super) struct Paragraph {
+/// One paragraph inside an emphasis element, buffered apart so it gets a run of its own, and
+/// how it was set off.
+pub(super) struct EmphasisParagraph {
     pub(super) before: Separator,
     pub(super) start: BlockStart,
     text: String,
     pub(super) ends: InlineWriter,
 }
 
-impl Paragraph {
+impl EmphasisParagraph {
     const fn new(before: Separator, start: BlockStart) -> Self {
         Self {
             before,
@@ -244,8 +245,8 @@ impl Paragraph {
         }
     }
 
-    /// The paragraph being written, which the first is until a second starts.
-    fn last(paragraphs: &mut Vec<Self>) -> &mut Self {
+    /// The paragraph being written; the first is created here.
+    fn last_or_new(paragraphs: &mut Vec<Self>) -> &mut Self {
         if paragraphs.is_empty() {
             paragraphs.push(Self::new(Separator::None, BlockStart::Text));
         }
@@ -279,7 +280,7 @@ impl Frame {
 #[allow(clippy::struct_excessive_bools)]
 pub(super) struct BlockWriter {
     lines: Lines,
-    paragraph: InlineWriter,
+    inline: InlineWriter,
     opts: FormatOpts,
     /// The separator owed before the next content, written only once content follows.
     owed: Separator,
@@ -296,9 +297,9 @@ pub(super) struct BlockWriter {
     /// paragraph kept apart.
     wrote_block: bool,
     /// The separator owed before the first content, which a fragment leaves to its parent.
-    lead: Separator,
+    owed_before: Separator,
     /// Some: each paragraph is kept apart instead of separated, the last one being written.
-    paragraphs: Option<Vec<Paragraph>>,
+    paragraphs: Option<Vec<EmphasisParagraph>>,
 }
 
 impl BlockWriter {
@@ -308,7 +309,7 @@ impl BlockWriter {
     pub(super) fn fragment(buf: String, opts: FormatOpts) -> Self {
         Self {
             lines: Lines::new(buf, opts.table_cell),
-            paragraph: InlineWriter::new(),
+            inline: InlineWriter::new(),
             opts,
             owed: Separator::None,
             paragraph_opened: false,
@@ -317,7 +318,7 @@ impl BlockWriter {
             owed_exactly: false,
             content_starts: 0,
             wrote_block: false,
-            lead: Separator::None,
+            owed_before: Separator::None,
             paragraphs: None,
         }
     }
@@ -331,23 +332,24 @@ impl BlockWriter {
     /// The paragraphs kept apart, if a line break came before or between them; what is owed
     /// after them comes last, as an empty paragraph.
     #[inline]
-    pub(super) fn take_paragraphs(&mut self) -> Option<Vec<Paragraph>> {
-        let set_off =
-            |ps: &Vec<Paragraph>| ps.first().is_some_and(|p| p.before >= Separator::LineBreak);
+    pub(super) fn take_paragraphs(&mut self) -> Option<Vec<EmphasisParagraph>> {
+        let set_off = |ps: &Vec<EmphasisParagraph>| {
+            ps.first().is_some_and(|p| p.before >= Separator::LineBreak)
+        };
         if !self
             .paragraphs
             .as_ref()
-            .is_some_and(|ps| self.wrote_block || self.paragraph.breaks() > 1 || set_off(ps))
+            .is_some_and(|ps| self.wrote_block || self.inline.breaks() > 1 || set_off(ps))
         {
             return None;
         }
-        self.paragraph.finish(&mut self.lines);
+        self.inline.finish(&mut self.lines);
         // a space at the end goes after the last run, as in `finish_fragment`
-        self.paragraph.end_space(&mut self.lines, true);
+        self.inline.end_space(&mut self.lines, true);
         let owed = std::mem::take(&mut self.owed);
         let mut paragraphs = self.paragraphs.take()?;
         self.keep_paragraph(&mut paragraphs);
-        paragraphs.push(Paragraph::new(owed, BlockStart::Text));
+        paragraphs.push(EmphasisParagraph::new(owed, BlockStart::Text));
         Some(paragraphs)
     }
 
@@ -369,16 +371,16 @@ impl BlockWriter {
                 let _ = self.write_separator(p.start, None);
             }
             self.lines.push_lines(&p.text);
-            self.paragraph = p.ends;
+            self.inline = p.ends;
         }
         self.owed = after;
     }
 
     /// Moves the paragraph written to the last of `paragraphs`.
-    fn keep_paragraph(&mut self, paragraphs: &mut Vec<Paragraph>) {
-        let last = Paragraph::last(paragraphs);
+    fn keep_paragraph(&mut self, paragraphs: &mut Vec<EmphasisParagraph>) {
+        let last = EmphasisParagraph::last_or_new(paragraphs);
         last.text = self.lines.take();
-        last.ends = std::mem::replace(&mut self.paragraph, InlineWriter::new());
+        last.ends = std::mem::replace(&mut self.inline, InlineWriter::new());
     }
 
     /// A document of its own, which starts at a line start.
@@ -392,24 +394,24 @@ impl BlockWriter {
     /// label writes keeps its edge spaces.
     pub(super) fn finish(mut self) -> String {
         let trim = !self.opts.include_node && !self.opts.link_body;
-        self.end_paragraph(trim);
+        self.end_inline(trim);
         self.lines.into_string()
     }
 
-    /// Writes what the paragraph holds back, for a parent to place the fragment; whether it
+    /// Writes what the inline writer holds back, for a parent to place the fragment; whether it
     /// holds a block.
     pub(super) fn finish_fragment(&mut self) -> bool {
         // a hard break at the end belongs to the line the run is on; two end a paragraph
-        self.paragraph.finish(&mut self.lines);
+        self.inline.finish(&mut self.lines);
         self.wrote_block |= self.breaks_before(Separator::None, false) == Separator::BlankLine;
-        self.paragraph.write_breaks(&mut self.lines);
-        self.paragraph.end_space(&mut self.lines, true);
+        self.inline.write_breaks(&mut self.lines);
+        self.inline.end_space(&mut self.lines, true);
         self.wrote_block
     }
 
-    /// What the fragment owes before its content; see `lead`.
-    pub(super) const fn lead(&self) -> Separator {
-        self.lead
+    /// What the fragment owes before its content, which its parent writes.
+    pub(super) const fn owed_before(&self) -> Separator {
+        self.owed_before
     }
 
     /// What the fragment still owes after its content.
@@ -428,7 +430,7 @@ impl BlockWriter {
     pub(super) fn content(&self) -> Fragment<'_> {
         Fragment {
             text: self.lines.as_str(),
-            ends: &self.paragraph,
+            ends: &self.inline,
         }
     }
 
@@ -461,26 +463,26 @@ impl BlockWriter {
             return;
         }
         match inline {
-            Inline::Text(s, opts) => self.paragraph.push_text(&mut self.lines, s, opts),
-            inline => self.paragraph.push(&mut self.lines, inline),
+            Inline::Text(s, opts) => self.inline.push_text(&mut self.lines, s, opts),
+            inline => self.inline.push(&mut self.lines, inline),
         }
     }
 
     /// Writes a text node; text that continues the line, the common case, skips `push`.
     #[inline]
     pub(super) fn push_text(&mut self, s: &str, opts: FormatOpts) {
-        if self.starts_content_line() || self.paragraph.breaks() > 1 {
+        if self.starts_content_line() || self.inline.breaks() > 1 {
             return self.push(Inline::Text(s, opts));
         }
-        self.paragraph.push_text(&mut self.lines, s, opts);
+        self.inline.push_text(&mut self.lines, s, opts);
     }
 
     /// Whether `inline` shows content, which needs what is owed written before it.
     fn shows(&self, inline: &Inline) -> bool {
         // whitespace next to a block boundary shows nothing
-        let blank_shows = || !self.starts_content_line() && self.paragraph.breaks() == 0;
+        let blank_shows = || !self.starts_content_line() && self.inline.breaks() == 0;
         match inline {
-            Inline::Separator => false,
+            Inline::WordBoundary => false,
             Inline::Text(s, _) => !s.trim_ascii().is_empty() || blank_shows(),
             Inline::Emphasis { content: run, .. } => {
                 !run.text.trim_ascii().is_empty() || (!run.text.is_empty() && blank_shows())
@@ -501,9 +503,9 @@ impl BlockWriter {
         };
         // a paragraph ends once
         if sep >= Separator::LineBreak && self.owed < Separator::LineBreak {
-            self.end_paragraph(true);
+            self.end_inline(true);
         } else if sep == Separator::Space {
-            self.paragraph.finish(&mut self.lines);
+            self.inline.finish(&mut self.lines);
         }
         self.owed = self.owed.max(sep);
     }
@@ -530,7 +532,7 @@ impl BlockWriter {
     /// Closes a `<p>`; one that wrote nothing leaves no trace.
     pub(super) fn close_paragraph(&mut self) {
         if !std::mem::take(&mut self.paragraph_opened) {
-            self.end_paragraph(true);
+            self.end_inline(true);
             self.set_item_end(BlockEnd::Para);
         }
         self.owe(Separator::BlankLine);
@@ -556,10 +558,10 @@ impl BlockWriter {
             self.line_open = true;
         } else {
             self.start_content(start, Some(first));
-            self.paragraph.push_raw(&mut self.lines, first);
+            self.inline.push_raw(&mut self.lines, first);
             // its spaces are content
             self.lines.mark_line_start();
-            self.paragraph.end_paragraph();
+            self.inline.end_line();
             self.set_item_end(end);
         }
         // the lines after the first are not blocks of their own: they only break the line
@@ -574,7 +576,7 @@ impl BlockWriter {
             Some(_) => {
                 self.owed = Separator::None;
                 self.lines.mark_line_start();
-                self.paragraph.end_paragraph();
+                self.inline.end_line();
                 self.set_item_end(end);
             }
             None => {}
@@ -586,20 +588,20 @@ impl BlockWriter {
     pub(super) fn hard_break(&mut self, force: bool) {
         // a block before it already ends the line
         if self.line_open && self.owed < Separator::LineBreak {
-            self.paragraph.hard_break(&mut self.lines, force);
+            self.inline.hard_break(&mut self.lines, force);
         }
     }
 
     /// Content written as it is, such as a task marker.
     pub(super) fn push_raw(&mut self, s: &str) {
         self.start_content(BlockStart::Text, None);
-        self.paragraph.push_raw(&mut self.lines, s);
+        self.inline.push_raw(&mut self.lines, s);
     }
 
     /// Opens a quote or list item: the lines written until `close_prefix` start with its prefix.
     pub(super) fn open_prefix(&mut self, prefix: LinePrefix) {
         // the line before ends here, without the space owed at its end
-        self.end_paragraph(true);
+        self.end_inline(true);
         self.frames.push(Frame {
             prefix,
             marker_due: true,
@@ -623,11 +625,11 @@ impl BlockWriter {
             (LinePrefix::Quote, false) => Some(BlockEnd::Quote),
         };
         // hard breaks at a container's end leave no blank line inside it
-        if self.paragraph.breaks() > 1 {
-            self.paragraph.take_breaks(&mut self.lines);
-            self.paragraph.hard_break(&mut self.lines, true);
+        if self.inline.breaks() > 1 {
+            self.inline.take_breaks(&mut self.lines);
+            self.inline.hard_break(&mut self.lines, true);
         }
-        self.end_paragraph(true);
+        self.end_inline(true);
         let frame = self.frames.pop()?;
         self.lines.restore_prefix(frame.outer_prefix);
         if let Some(end) = end {
@@ -659,12 +661,12 @@ impl BlockWriter {
         }
     }
 
-    /// Ends the paragraph in progress: what it holds back is written, its trailing spaces
+    /// Ends the inline content in progress: what it holds back is written, its trailing spaces
     /// dropped.
-    fn end_paragraph(&mut self, trim: bool) {
-        self.paragraph.finish(&mut self.lines);
-        self.paragraph.end_space(&mut self.lines, !trim);
-        self.paragraph.end_paragraph();
+    fn end_inline(&mut self, trim: bool) {
+        self.inline.finish(&mut self.lines);
+        self.inline.end_space(&mut self.lines, !trim);
+        self.inline.end_line();
     }
 
     /// Writes what content starting as `start` needs first: the separator owed, a new line's
@@ -737,12 +739,12 @@ impl BlockWriter {
         }
         // a fragment leaves the separator before its first content to its parent
         if self.lines.as_str().is_empty() {
-            self.lead = self.lead.max(sep);
+            self.owed_before = self.owed_before.max(sep);
             sep = Separator::None;
         }
         if sep == Separator::Space {
             // a space held back at the end of the text is the separator's
-            self.paragraph.end_space(&mut self.lines, true);
+            self.inline.end_space(&mut self.lines, true);
         }
         sep.write(&mut self.lines);
         if sep >= Separator::LineBreak {
@@ -760,13 +762,13 @@ impl BlockWriter {
         };
         if self.lines.as_str().is_empty() {
             // its hard breaks are in `before` already
-            self.paragraph.take_breaks(&mut self.lines);
-            let last = Paragraph::last(&mut paragraphs);
+            self.inline.take_breaks(&mut self.lines);
+            let last = EmphasisParagraph::last_or_new(&mut paragraphs);
             last.before = last.before.max(before);
             last.start = start;
         } else {
             self.keep_paragraph(&mut paragraphs);
-            paragraphs.push(Paragraph::new(before, start));
+            paragraphs.push(EmphasisParagraph::new(before, start));
             self.wrote_block = true;
         }
         self.paragraphs = Some(paragraphs);
@@ -834,7 +836,7 @@ impl BlockWriter {
     /// What the hard breaks owed (`run_break`: one more at a run's start) make of `sep`: two end
     /// the paragraph, one replaces a space; before a cell's first text they are kept as content.
     fn breaks_before(&self, sep: Separator, run_break: bool) -> Separator {
-        let breaks = self.paragraph.breaks() + usize::from(run_break);
+        let breaks = self.inline.breaks() + usize::from(run_break);
         if breaks == 0 || (self.opts.table_cell && self.lines.as_str().is_empty()) {
             sep
         } else if breaks > 1 {
@@ -849,10 +851,10 @@ impl BlockWriter {
     /// A block drops the hard breaks owed, except that a single one before a line break still
     /// ends its line (`  `), unless a `marker` starts the next outside a cell's first text.
     fn write_breaks_before(&mut self, sep: Separator, marker: bool) {
-        let breaks = self.paragraph.take_breaks(&mut self.lines);
+        let breaks = self.inline.take_breaks(&mut self.lines);
         let cell_start = self.opts.table_cell && self.lines.as_str().is_empty();
         if sep == Separator::LineBreak && breaks == 1 && (!marker || cell_start) {
-            self.paragraph.end_space(&mut self.lines, false);
+            self.inline.end_space(&mut self.lines, false);
             self.lines.push_str("  ");
         }
     }
@@ -936,7 +938,7 @@ impl BlockWriter {
         }
         self.line_open = true;
         self.lines.mark_line_start();
-        self.paragraph.end_paragraph();
+        self.inline.end_line();
     }
 
     /// The spaces before the marker of the item at `i`: a nested list sits past the content

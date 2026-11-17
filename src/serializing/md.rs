@@ -8,20 +8,21 @@
 //! children. `BlockWriter` turns those into Markdown, and `Lines` owns the output `String`.
 //!
 //! The one rule: **write nothing until it is known what it should be.** The separator between
-//! blocks, the space an svg or option leaves, a trailing space, hard breaks and an emphasis run
-//! are owed, and settled when the next visible content arrives. A line break, once written,
-//! stays: nothing re-indents or re-breaks the lines before it. Only the end of the current line
-//! is read or edited (`Lines::edit_line`), as when a `!` before a link is escaped
-//! (`escape_trailing_bang`) or a code span is kept off the one before (`ends_with_code_span`).
-//! Content is buffered only when a decision needs all of it (an emphasis run or link label for
-//! its visible edges, a table cell, a heading), each in a `BlockWriter::fragment` of its own; a
-//! table cell and a heading drop their fragment's trailing `<br>` before placing it.
+//! blocks, the space a word boundary (an svg or option) leaves, a trailing space, hard breaks
+//! and an emphasis run are owed, and settled when the next visible content arrives. A line
+//! break, once written, stays: nothing re-indents or re-breaks the lines before it. Only the
+//! end of the current line is read or edited (`Lines::edit_line`), as when a `!` before a link
+//! is escaped (`escape_trailing_bang`) or a code span is kept off the one before
+//! (`ends_with_code_span`). Content is buffered only when a decision needs all of it (an
+//! emphasis run or link label for its visible edges, a table cell, a heading), each in a
+//! `BlockWriter::fragment` of its own; a table cell and a heading drop their fragment's
+//! trailing `<br>` before placing it.
 //!
 //! # Where to look
 //!
 //! | Symptom | Rule |
 //! |---|---|
-//! | a space wrongly added or missing next to an svg or option | `inline::separator_is_space` |
+//! | a space wrongly added or missing at a word boundary (an svg or option) | `inline::boundary_is_space` |
 //! | a space lost or doubled at an emphasis edge | `Edges::of`, `inline::push_edge_space`; in text, `text_utils::push_words` |
 //! | `**` printed literally, or `<strong>` where `**` would do | `Emphasis::fits`, `Emphasis::can_merge`, `LastWritten::delimiters_fit`, `emphasis::fuses_ambiguously` |
 //! | too many or too few blank lines between blocks | `block::block_gap`, `Block::edges`, `BlockWriter::close_prefix` (an item's end seen from outside) |
@@ -3535,7 +3536,7 @@ fn main() {
         // empty inline parent, non-element neighbour, end of block/link
         html_2md_compare("<p><em>a.</em></p>", "*a.*");
         html_2md_compare("<p><a href=\"u\">x<em>a.</em></a></p>", "[x*a.*](u)");
-        // one sample per new is_flanking_safe range
+        // one sample per new is_space_or_punctuation range
         html_2md_compare("<p><em>a.</em>\u{3008}b</p>", "*a.*\u{3008}b");
         html_2md_compare("<p><em>a.</em>\u{ff0c}b</p>", "*a.*\u{ff0c}b");
         html_2md_compare("<p><em>a.</em>\u{ff1a}b</p>", "*a.*\u{ff1a}b");

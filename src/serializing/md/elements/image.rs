@@ -7,7 +7,9 @@ use super::super::block::BlockWriter;
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
 use super::super::inline::Inline;
-use super::super::text_utils::{push_md_url, push_normalized_text, push_title};
+use super::super::text_utils::{
+    NEVER_AT_LINE_START, push_md_url, push_normalized_text, push_title,
+};
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
@@ -21,7 +23,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         text.push_str("![");
 
         if let Some(alt) = el.attr_ref(local_name!("alt")) {
-            push_normalized_text(&mut text, usize::MAX, alt, FormatOpts::new());
+            push_normalized_text(&mut text, NEVER_AT_LINE_START, alt, FormatOpts::new());
         }
         text.push(']');
         text.push('(');

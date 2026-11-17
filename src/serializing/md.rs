@@ -23,7 +23,7 @@
 //! |---|---|
 //! | a space wrongly added or missing next to an svg or option | `inline::separator_is_space` |
 //! | a space lost or doubled at an emphasis edge | `Edges::of`, `inline::push_edge_space`; in text, `text_utils::push_words` |
-//! | `**` printed literally, or `<strong>` where `**` would do | `Emphasis::fits`, `Emphasis::can_merge`, `LastWritten::fuses`, `emphasis::fuses_ambiguously` |
+//! | `**` printed literally, or `<strong>` where `**` would do | `Emphasis::fits`, `Emphasis::can_merge`, `LastWritten::delimiters_fit`, `emphasis::fuses_ambiguously` |
 //! | too many or too few blank lines between blocks | `block::block_gap`, `Block::edges`, `BlockWriter::close_prefix` (an item's end seen from outside) |
 //! | a list loose when it should be tight, or the reverse | `block::item_gap`, `BlockWriter::list_gap` |
 //! | a lost `> ` or list indent | `BlockWriter::start_line`, `BlockWriter::item_indent`; `Lines` is the only writer of line breaks |

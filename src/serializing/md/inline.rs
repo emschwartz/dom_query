@@ -363,7 +363,7 @@ impl InlineWriter {
             }
         }
         // what the pending run is followed by: an edge is whitespace, and a run of the same
-        // kind fuses with it anyway (`LastWritten::fuses`)
+        // kind fuses with it anyway (`LastWritten::delimiters_fit`)
         let same_kind = self
             .pending_run
             .as_ref()
@@ -440,9 +440,7 @@ impl InlineWriter {
             .next()
             .or(if run.breaks { Some('\n') } else { after });
         let (kind, start) = (run.kind, run.start);
-        if !start.fuses(kind, &run.content)
-            && kind.fits(start.before(kind), start.joins(kind), &run.content, after)
-        {
+        if start.delimiters_fit(kind, &run.content, after) {
             let (marker, delim) = (kind.marker(), kind.delimiter());
             out.push_str(marker);
             out.push_lines(&run.content);
@@ -494,30 +492,26 @@ impl InlineWriter {
 }
 
 impl LastWritten {
-    /// The source character an opening delimiter of `kind` would follow; a closing delimiter
-    /// of the same character joins it into one delimiter run, so it looks past that.
-    fn before(self, kind: Emphasis) -> Option<char> {
-        match self {
-            Self::Edge => None,
-            Self::Char(c) => Some(c),
+    /// Whether delimiters of `kind` around `content` fit after this and before `after`; an
+    /// opener right after a closer of the same character joins its delimiter run.
+    fn delimiters_fit(self, kind: Emphasis, content: &str, after: Option<char>) -> bool {
+        let (before, joined) = match self {
+            Self::Edge => (None, false),
+            Self::Char(c) => (Some(c), false),
             Self::Closing {
-                kind: k, before, ..
-            } if k.delimiter() == kind.delimiter() => before,
-            Self::Closing { kind: k, .. } => Some(k.delimiter()),
-        }
-    }
-
-    /// Whether an opening delimiter of `kind` here joins the closing one before it into one run.
-    fn joins(self, kind: Emphasis) -> bool {
-        matches!(self, Self::Closing { kind: k, .. } if k.delimiter() == kind.delimiter())
-    }
-
-    /// Whether an opening delimiter of `kind` before `content` would fuse with the closing one
-    /// before it: `**a***b*` works, `**a****b**`, `***a*****b**` and `**a*****b**c*` don't.
-    fn fuses(self, kind: Emphasis, content: &str) -> bool {
-        matches!(self, Self::Closing { kind: k, nested, .. }
-            if k.delimiter() == kind.delimiter()
-                && (k == kind || nested || content.starts_with(kind.delimiter())))
+                kind: k,
+                before,
+                nested,
+            } if k.delimiter() == kind.delimiter() => {
+                // `**a***b*` works; `**a****b**`, `***a*****b**` and `**a*****b**c*` don't
+                if k == kind || nested || content.starts_with(kind.delimiter()) {
+                    return false;
+                }
+                (before, true)
+            }
+            Self::Closing { kind: k, .. } => (Some(k.delimiter()), false),
+        };
+        kind.fits(before, joined, content, after)
     }
 }
 

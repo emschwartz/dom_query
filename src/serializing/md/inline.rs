@@ -129,18 +129,15 @@ impl InlineWriter {
     }
 
     /// Writes the space owed, before more of the line.
-    fn write_space(&mut self, out: &mut Lines) {
+    pub(super) fn write_ending_space(&mut self, out: &mut Lines) {
         if std::mem::take(&mut self.ending_space) {
             out.push(' ');
             self.written = LastWritten::Char(' ');
         }
     }
 
-    /// Writes the space owed, or drops it at a line end.
-    pub(super) fn end_space(&mut self, out: &mut Lines, keep: bool) {
-        if keep {
-            self.write_space(out);
-        }
+    /// Drops the space owed, at a line end.
+    pub(super) fn drop_ending_space(&mut self) {
         self.ending_space = false;
     }
 
@@ -262,13 +259,20 @@ impl InlineWriter {
         self.written = LastWritten::Edge;
     }
 
-    /// A hard break; one that only ends a line some other way (`!force`) adds none to one owed.
-    pub(super) fn hard_break(&mut self, out: &mut Lines, force: bool) {
+    /// A hard break, written once more of the line follows.
+    pub(super) fn hard_break(&mut self, out: &mut Lines) {
         self.settle(out, Some('\n'));
         self.boundary_after = false;
-        if force || self.breaks() == 0 {
-            self.breaks += 1;
+        self.breaks += 1;
+    }
+
+    /// A hard break unless one is owed already, for a line that ends some other way.
+    pub(super) fn ensure_hard_break(&mut self, out: &mut Lines) {
+        self.settle(out, Some('\n'));
+        if self.breaks == 0 {
+            self.hard_break(out);
         }
+        self.boundary_after = false;
     }
 
     /// The hard breaks owed, a pending run's included.
@@ -326,7 +330,7 @@ impl InlineWriter {
         self.settle(out, if boundary_space { Some(' ') } else { source });
         self.write_breaks(out);
         let spaced = self.ending_space;
-        self.write_space(out);
+        self.write_ending_space(out);
         (boundary_space && self.write_boundary_space(out)) || spaced
     }
 
@@ -397,7 +401,7 @@ impl InlineWriter {
                 if !line.trim_ascii().is_empty() {
                     self.push_emphasis(out, kind, line, first);
                 }
-                self.hard_break(out, true);
+                self.hard_break(out);
             }
             if !last.trim_ascii().is_empty() {
                 self.push_emphasis(out, kind, last, first);

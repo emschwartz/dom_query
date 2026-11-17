@@ -237,7 +237,11 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
             // a hard break can leave a blank line inside `[...]`
             out.push(Inline::HtmlBreak);
         } else {
-            out.hard_break(name.local == local_name!("br"));
+            if name.local == local_name!("br") {
+                out.hard_break();
+            } else {
+                out.ensure_hard_break();
+            }
             // an item that wrote nothing still sets the text around it apart, as on main
             if name.local == local_name!("li") && out.owed() >= Separator::LineBreak {
                 out.owe(Separator::BlankLine);

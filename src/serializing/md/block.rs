@@ -345,7 +345,7 @@ impl BlockWriter {
         }
         self.inline.finish(&mut self.lines);
         // a space at the end goes after the last run, as in `finish_fragment`
-        self.inline.end_space(&mut self.lines, true);
+        self.inline.write_ending_space(&mut self.lines);
         let owed = std::mem::take(&mut self.owed);
         let mut paragraphs = self.paragraphs.take()?;
         self.keep_paragraph(&mut paragraphs);
@@ -405,7 +405,7 @@ impl BlockWriter {
         self.inline.finish(&mut self.lines);
         self.wrote_block |= self.breaks_before(Separator::None, false) == Separator::BlankLine;
         self.inline.write_breaks(&mut self.lines);
-        self.inline.end_space(&mut self.lines, true);
+        self.inline.write_ending_space(&mut self.lines);
         self.wrote_block
     }
 
@@ -583,13 +583,23 @@ impl BlockWriter {
         }
     }
 
-    /// A hard break, written once more of the paragraph follows; two end it. One that only
-    /// ends a line some other way (`!force`) adds none to one owed.
-    pub(super) fn hard_break(&mut self, force: bool) {
-        // a block before it already ends the line
-        if self.line_open && self.owed < Separator::LineBreak {
-            self.inline.hard_break(&mut self.lines, force);
+    /// A hard break, written once more of the paragraph follows; two end it.
+    pub(super) fn hard_break(&mut self) {
+        if !self.line_ended() {
+            self.inline.hard_break(&mut self.lines);
         }
+    }
+
+    /// A hard break unless one is owed already, for a line that ends some other way.
+    pub(super) fn ensure_hard_break(&mut self) {
+        if !self.line_ended() {
+            self.inline.ensure_hard_break(&mut self.lines);
+        }
+    }
+
+    /// A block before already ends the line.
+    fn line_ended(&self) -> bool {
+        !self.line_open || self.owed >= Separator::LineBreak
     }
 
     /// Content written as it is, such as a task marker.
@@ -627,7 +637,7 @@ impl BlockWriter {
         // hard breaks at a container's end leave no blank line inside it
         if self.inline.breaks() > 1 {
             self.inline.take_breaks(&mut self.lines);
-            self.inline.hard_break(&mut self.lines, true);
+            self.inline.hard_break(&mut self.lines);
         }
         self.end_inline(true);
         let frame = self.frames.pop()?;
@@ -665,7 +675,11 @@ impl BlockWriter {
     /// dropped.
     fn end_inline(&mut self, trim: bool) {
         self.inline.finish(&mut self.lines);
-        self.inline.end_space(&mut self.lines, !trim);
+        if trim {
+            self.inline.drop_ending_space();
+        } else {
+            self.inline.write_ending_space(&mut self.lines);
+        }
         self.inline.end_line();
     }
 
@@ -744,7 +758,7 @@ impl BlockWriter {
         }
         if sep == Separator::Space {
             // a space held back at the end of the text is the separator's
-            self.inline.end_space(&mut self.lines, true);
+            self.inline.write_ending_space(&mut self.lines);
         }
         sep.write(&mut self.lines);
         if sep >= Separator::LineBreak {
@@ -854,7 +868,7 @@ impl BlockWriter {
         let breaks = self.inline.take_breaks(&mut self.lines);
         let cell_start = self.opts.table_cell && self.lines.as_str().is_empty();
         if sep == Separator::LineBreak && breaks == 1 && (!marker || cell_start) {
-            self.inline.end_space(&mut self.lines, false);
+            self.inline.drop_ending_space();
             self.lines.push_str("  ");
         }
     }

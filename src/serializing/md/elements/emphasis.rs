@@ -269,7 +269,7 @@ fn write_paragraph(out: &mut BlockWriter, kind: Emphasis, p: &EmphasisParagraph)
     let content = p.content();
     out.push(Inline::Emphasis { kind, content });
     for _ in 0..p.ends.breaks() {
-        out.hard_break(true);
+        out.hard_break();
     }
     if para {
         out.close_paragraph();

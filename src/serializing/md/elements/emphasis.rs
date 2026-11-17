@@ -113,8 +113,9 @@ fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
     let (mut prev, mut escaped) = (None, false);
     let mut chars = content.chars();
     while let Some(c) = chars.next() {
-        let starts_run = c == delim && !escaped && prev.is_some_and(|p| p != delim);
-        if starts_run && let Some(before) = prev {
+        // a delimiter run starts here, after `before`
+        let before = prev.filter(|&p| c == delim && !escaped && p != delim);
+        if let Some(before) = before {
             let after = chars.clone().find(|&n| n != delim);
             if after.is_some_and(|after| opens_and_closes(before, after)) {
                 return true;

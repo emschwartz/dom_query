@@ -188,11 +188,6 @@ fn find_node<'a>(
     None
 }
 
-/// An element written as its own block outside link text.
-pub(in crate::serializing::md) fn node_is_block(node: &NodeRef) -> bool {
-    node_is_md_block(node) || node.has_name("pre")
-}
-
 /// A comment or a text node holding only whitespace: neither shows content.
 fn is_blank(node: &NodeRef) -> bool {
     node.is_comment() || node.is_ascii_empty()

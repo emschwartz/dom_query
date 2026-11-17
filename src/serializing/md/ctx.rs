@@ -17,17 +17,6 @@ impl EmphasisScope {
     }
 }
 
-impl From<&str> for EmphasisScope {
-    fn from(marker: &str) -> Self {
-        match marker {
-            // TODO: support "_"
-            "*" => Self::ITALIC,
-            "~~" => Self::STRIKE,
-            _ => Self::BOLD,
-        }
-    }
-}
-
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Default, Clone, Copy)]
 pub struct FormatOpts {

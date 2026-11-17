@@ -1,21 +1,14 @@
 use html5ever::{QualName, local_name};
 
-pub(super) const fn md_prefix(name: &QualName) -> Option<&'static str> {
-    let prefix = match name.local {
+pub(super) const fn md_prefix(name: &QualName) -> &'static str {
+    match name.local {
         local_name!("h1") => "# ",
         local_name!("h2") => "## ",
         local_name!("h3") => "### ",
         local_name!("h4") => "#### ",
         local_name!("h5") => "##### ",
         local_name!("h6") => "###### ",
-        local_name!("hr") => "---",
         _ => "",
-    };
-
-    if prefix.is_empty() {
-        None
-    } else {
-        Some(prefix)
     }
 }
 

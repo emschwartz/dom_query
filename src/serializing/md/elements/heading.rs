@@ -31,7 +31,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         content = rest.trim_ascii_end();
     }
     let mut line = h.take_buf();
-    let prefix = md_prefix(&el.name).unwrap_or_default();
+    let prefix = md_prefix(&el.name);
     // an empty heading's line ends at its marker
     line.push_str(if content.is_empty() {
         prefix.trim_end()

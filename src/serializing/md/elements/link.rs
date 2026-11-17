@@ -2,11 +2,10 @@ use html5ever::local_name;
 
 use crate::{Element, NodeId, NodeRef};
 
-use super::super::block::{BlockWriter, Separator};
+use super::super::block::{BlockWriter, Separator, is_md_block};
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
 use super::super::inline::{Fragment, Inline};
-use super::list::node_is_block;
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
@@ -61,6 +60,11 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     if ends_with_block(&node) {
         out.owe(sep);
     }
+}
+
+/// An element written as its own block outside link text.
+fn node_is_block(node: &NodeRef) -> bool {
+    node.qual_name_ref().is_some_and(|name| is_md_block(&name)) || node.has_name("pre")
 }
 
 fn starts_with_block(node: &NodeRef) -> bool {

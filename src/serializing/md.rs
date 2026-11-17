@@ -317,6 +317,8 @@ $ cargo new hello
 $ cd hello
 ```";
         html_2md_compare(contents, expected);
+        // in a heading it is a code span, set apart only by its own edge spaces
+        html_2md_compare("<h2><code>a\nb</code>c</h2>", "## `a b`c");
     }
 
     #[test]
@@ -1897,6 +1899,11 @@ Another Paragraph";
             r#"<a href="/u"><code>x</code><code>y</code></a>"#,
             "[`x` `y`](/u)",
         );
+        // a multi-line code span keeps only its own edge spaces; one at the end follows the link
+        html_2md_compare(
+            "<p>q<a href=\"u\">a<code> x\ny </code></a>z</p>",
+            "q[a `x y`](u) z",
+        );
         // brackets in a formatted label are escaped like any other text
         html_2md_compare(r#"<a href="/u"><b>[x]</b></a>"#, r"[**\[x\]**](/u)");
     }
@@ -3198,6 +3205,11 @@ fn main() {
         // adjacent code spans are kept apart: `x``y` would be a single span
         let md = "`x` `y`";
         html_2md_compare("<p><code>x</code><code>y</code></p>", md);
+        // so are those of two emphasis runs that would join
+        html_2md_compare(
+            "<p><i><code>b</code></i><em><code>b</code></em></p>",
+            "*`b`*<em>`b`</em>",
+        );
         // an escaped backtick is text, so it needs no separator
         html_2md_compare("<p>a`<code>b</code></p>", r"a\``b`");
         html_2md_compare(r"<p>a\`<code>b</code></p>", r"a\\\``b`");
@@ -3381,10 +3393,16 @@ fn main() {
         html_2md_compare("<p>x<b>a</b><b> </b>y</p>", "x**a** y");
         html_2md_compare("<p><b>a </b><span> </span>y</p>", "**a** y");
         html_2md_compare("<p>x<b><br></b>y</p>", "x  \ny");
+        // each break in it counts, so two make a blank line
+        html_2md_compare("<p>a<br><b><br></b>b</p>", "a\n\nb");
+        html_2md_compare("<p>a<em><br>&nbsp;<br></em>b</p>", "a  \n\u{a0}  \nb");
         // a no-break space next to that break is content, and a space before it at a line start
         // shows nothing
         html_2md_compare("<p>a<b>&nbsp;<br></b>b</p>", "a\u{a0}  \nb");
         html_2md_compare("<p>a<b><br>&nbsp;</b>b</p>", "a  \n\u{a0}b");
+        html_2md_compare("<p>a<b><br>&#x2003; </b>é</p>", "a  \n\u{2003} é");
+        // after a run's break it goes after the break too
+        html_2md_compare("<p><em>}<br></em><s>&nbsp;</s>x</p>", "*}*  \n\u{a0}x");
         html_2md_compare("<ol><li><b> &nbsp;</b>z</li></ol>", "1. \u{a0}z");
         // whitespace after a run that shows nothing, or after a hard break, adds no space
         html_2md_compare("<ul><li><i> </i><span> </span>a</li></ul>", "- a");
@@ -3520,6 +3538,12 @@ fn main() {
         html_2md_compare("<p><em>a.</em>\u{ff1a}b</p>", "*a.*\u{ff1a}b");
         html_2md_compare("<p><em>a.</em>\u{ff3b}b</p>", "*a.*\u{ff3b}b");
         html_2md_compare("<p><em>a.</em>\u{ff5b}b</p>", "*a.*\u{ff5b}b");
+        // pulldown-cmark counts symbols as punctuation too
+        html_2md_compare("<p><em>a.</em>\u{20ac}b</p>", "*a.*\u{20ac}b");
+        html_2md_compare("<p><em>a.</em>\u{2192}b</p>", "*a.*\u{2192}b");
+        html_2md_compare("<p><em>a.</em>\u{2500}b</p>", "*a.*\u{2500}b");
+        html_2md_compare("<p><em>a.</em>\u{2e17}b</p>", "*a.*\u{2e17}b");
+        html_2md_compare("<p><em>a.</em>\u{1f600}b</p>", "*a.*\u{1f600}b");
         // invisible characters must not pass flanking
         html_2md_compare("<p><em>a.</em>\u{ad}b</p>", "<em>a.</em>\u{ad}b");
         // neither do separators that CommonMark doesn't count as whitespace
@@ -3565,6 +3589,11 @@ fn main() {
         // the fused opener's first closer is the nested run's (`***a*b**`, `***a**b*`)
         html_2md_compare("<p><b><i>a</i>b</b></p>", "***a*b**");
         html_2md_compare("<p><em><strong>a</strong>b</em></p>", "***a**b*");
+        // an escaped delimiter just before a run doesn't hide where the run starts
+        html_2md_compare(
+            "<p><b><i>a</i> *<i>.</i></b></p>",
+            r"<strong>*a* \**.*</strong>",
+        );
         // but a second nested run's delimiters would close the fused opener early
         html_2md_compare(
             "<p><em><strong>a</strong>b<strong>c</strong>d</em></p>",

@@ -436,8 +436,11 @@ impl BlockWriter {
             self.start_content(BlockStart::Text, None);
         } else if match &inline {
             Inline::Text(..) => true,
-            // a run of only whitespace at a block boundary shows nothing, like such text
-            Inline::Emphasis { content, .. } => !content.text.is_empty(),
+            // a run of only whitespace at a block boundary shows nothing, like such text; a
+            // hard break in it is still written
+            Inline::Emphasis { content, .. } => {
+                !content.text.is_empty() && !content.text.contains('\n')
+            }
             _ => false,
         } {
             return;

@@ -53,6 +53,8 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 
     let title = el.attr_ref(local_name!("title"));
     out.push(Inline::Link { label, href, title });
+    // a space the label still owes, as after a code span ending in whitespace
+    out.owe(writer.owed().min(Separator::Space));
     h.put_buf(writer.into_buf());
 
     // text after the link must not join the paragraph its last block ended

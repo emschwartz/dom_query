@@ -21,7 +21,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     opts: FormatOpts,
 ) {
     if el.name.local == local_name!("pre") {
-        write_pre(h, out, id, opts);
+        write_pre(h, out, id, opts, true);
     } else {
         write_code(h, out, id, opts);
     }
@@ -62,7 +62,7 @@ fn find_code_language_css_class<H: MDHost>(h: &H, id: NodeId) -> Option<String> 
 
 /// Transforms a `<pre>` code block, possibly with an associated language label that the resulting
 /// block is annotated with.
-fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOpts) {
+fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOpts, pre: bool) {
     let nodes = h.nodes();
     let content = pre_text(&nodes, id);
     let mut span = h.scratch();
@@ -71,11 +71,17 @@ fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOp
     if opts.link_body {
         let code_text = content.split_ascii_whitespace().collect::<Vec<_>>();
         push_code_text(&mut span, &code_text.join(" "), opts.table_cell);
-        out.owe(Separator::Space);
+        // a `<pre>` is a block, set apart; a `<code>` keeps only its edge whitespace
+        let ws = |c: char| c.is_ascii_whitespace();
+        if pre || content.starts_with(ws) {
+            out.owe(Separator::Space);
+        }
         if !span.is_empty() {
             out.push(Inline::Code(&span));
         }
-        out.owe(Separator::Space);
+        if pre || content.ends_with(ws) {
+            out.owe(Separator::Space);
+        }
         return;
     }
 
@@ -173,7 +179,7 @@ fn write_code<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatO
     };
 
     if is_multiline {
-        return write_pre(h, out, id, opts);
+        return write_pre(h, out, id, opts, false);
     }
 
     // edge spaces are content, so keep them; whitespace around a line

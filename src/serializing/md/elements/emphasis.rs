@@ -6,6 +6,7 @@ use super::super::block::{Block, BlockStart, BlockWriter, Paragraph, Separator};
 use super::super::ctx::{EmphasisScope, FormatOpts};
 use super::super::host::MDHost;
 use super::super::inline::Inline;
+use super::code::ends_with_code_span;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::serializing::md) enum Emphasis {
@@ -90,7 +91,11 @@ impl Emphasis {
     ) -> bool {
         let star = matches!(self, Self::Italic) || (spaced && matches!(self, Self::Bold));
         let escapes = left.bytes().rev().take_while(|&b| b == b'\\').count();
-        !(star && left.ends_with('*')) && escapes % 2 == 0 && (spaced || junction_fits(left, right))
+        // two code spans that touch would merge their backticks
+        let code_spans = ends_with_code_span(left) && right.starts_with('`');
+        !(star && left.ends_with('*'))
+            && escapes % 2 == 0
+            && (spaced || (!code_spans && junction_fits(left, right)))
     }
 }
 
@@ -113,10 +118,12 @@ fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
     // unjoined, the first run closes the nested one: its length can't be a multiple of 3 with
     // the fused opener's, so it can't close the outer run (`***a**b*`)
     let (mut prev, mut escaped, mut first_run) = (None, false, !joined);
+    // `prev` is a literal, so a delimiter after it starts a run
+    let mut prev_escaped = false;
     let mut chars = content.chars();
     while let Some(c) = chars.next() {
         // a delimiter run starts here, after `before`
-        let before = prev.filter(|&p| c == delim && !escaped && p != delim);
+        let before = prev.filter(|&p| c == delim && !escaped && (p != delim || prev_escaped));
         if let Some(before) = before {
             let after = chars.clone().find(|&n| n != delim);
             if !first_run && after.is_some_and(|after| opens_and_closes(before, after)) {
@@ -124,6 +131,7 @@ fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
             }
             first_run = false;
         }
+        prev_escaped = escaped;
         escaped = c == '\\' && !escaped;
         prev = Some(c);
     }
@@ -289,12 +297,17 @@ const PUNCTUATION: &[(char, char)] = &[
     ('\u{ae}', '\u{bf}'),
     ('\u{2010}', '\u{2027}'),
     ('\u{2030}', '\u{205e}'),
+    ('\u{20a0}', '\u{20c0}'),
+    ('\u{2190}', '\u{2426}'),
+    ('\u{2500}', '\u{2bff}'),
+    ('\u{2e00}', '\u{2e5d}'),
     ('\u{3001}', '\u{3003}'),
     ('\u{3008}', '\u{3011}'),
     ('\u{ff01}', '\u{ff0f}'),
     ('\u{ff1a}', '\u{ff20}'),
     ('\u{ff3b}', '\u{ff40}'),
     ('\u{ff5b}', '\u{ff65}'),
+    ('\u{1f000}', '\u{1faff}'),
 ];
 
 /// Whitespace or punctuation. The spec's Unicode whitespace is `Zs`, tab, LF, FF and CR, so

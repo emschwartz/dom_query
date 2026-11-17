@@ -348,19 +348,21 @@ impl InlineWriter {
         // whitespace alone takes no delimiters
         if content.trim().is_empty() {
             if content.contains('\n') {
-                // hard breaks, between the no-break spaces around them
+                // hard breaks, between the no-break spaces around them; each `  ` before a
+                // `\n` is a break's marker, but spaces after the last one are content
                 let mut lines = content.split('\n');
-                let before = lines.next().unwrap_or_default().trim_end_matches(' ');
-                if !before.trim_ascii().is_empty() {
-                    self.push_emphasis(out, kind, before, first);
-                }
-                self.hard_break(out, true);
-                for after in lines.map(|l| l.trim_end_matches(' ')) {
-                    if !after.trim_ascii().is_empty() {
-                        self.push_emphasis(out, kind, after, first);
+                let last = lines.next_back().unwrap_or_default();
+                for line in lines.map(|l| l.trim_end_matches(' ')) {
+                    if !line.trim_ascii().is_empty() {
+                        self.push_emphasis(out, kind, line, first);
                     }
+                    self.hard_break(out, true);
                 }
-            } else if let Some(run) = &mut self.pending_run {
+                if !last.trim_ascii().is_empty() {
+                    self.push_emphasis(out, kind, last, first);
+                }
+            } else if let Some(run) = self.pending_run.as_mut().filter(|run| !run.breaks) {
+                // after a run's hard break, it would come before the break
                 run.trail.push_str(content);
             } else if content.bytes().all(|b| b == b' ') {
                 self.ending_space |=

@@ -814,6 +814,13 @@ $ cd hello
     }
 
     #[test]
+    fn test_list_stray_text_keeps_emphasis_scope() {
+        html_2md_compare("<b><ol>x<b>a</b></ol></b>", "**xa**");
+        html_2md_compare("<b><ul>a<b>z</b></ul></b>", "**az**");
+        html_2md_compare("<s><ol>a.<s>1.</s></ol></s>", "~~a.1.~~");
+    }
+
+    #[test]
     fn test_list_trailing_stray_text() {
         // stray text after the last item writes no item, so it must not hide it
         html_2md_compare(

@@ -28,9 +28,10 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let alt = !opts.table_cell && has_items && should_use_alt_marker(h, &el.name.local);
     let mut item_opts = opts.list_item();
     item_opts.include_node = false;
-    // content directly in the list is no item's: it keeps only the cell rules
+    // content directly in the list is no item's: it keeps only the cell and emphasis rules
     let mut stray_opts = FormatOpts::new().include_node();
     stray_opts.table_cell = opts.table_cell;
+    stray_opts.emphasis_scope = opts.emphasis_scope;
     let mut preceding = Preceding::Nothing;
     for child in list.children_it(false) {
         if !child.has_name("li") {

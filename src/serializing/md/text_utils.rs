@@ -4,15 +4,43 @@ use std::borrow::Cow;
 use super::ctx::FormatOpts;
 
 #[allow(clippy::cast_possible_truncation)]
-pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: FormatOpts) {
-    if !text.ends_with(['\n', ' ']) && !new_text.is_empty() && new_text.trim_ascii().is_empty() {
+/// Pushes the words of `new_text`, escaped; `line` is where the last line of `text` starts.
+pub(super) fn push_normalized_text(
+    text: &mut String,
+    line: usize,
+    new_text: &str,
+    f_opts: FormatOpts,
+) {
+    let mut space = false;
+    push_words(text, line, new_text, f_opts, &mut space);
+    if space {
         text.push(' ');
+    }
+}
+
+/// `push_normalized_text`, but a space at the end is owed in `space` instead of written, and
+/// one owed before is written only if words follow.
+pub(super) fn push_words(
+    text: &mut String,
+    line: usize,
+    new_text: &str,
+    f_opts: FormatOpts,
+    space: &mut bool,
+) {
+    if new_text.trim_ascii().is_empty() {
+        *space |= !new_text.is_empty() && !text.ends_with(['\n', ' ']);
         return;
+    }
+    if std::mem::take(space) {
+        text.push(' ');
     }
 
     // a link body buffer starts after its `[`, so it keeps its leading space
     let follows_newline = text.ends_with(['\n', ' ']) || (text.is_empty() && !f_opts.link_body);
+    // a fragment keeps a leading space for its parent to place, but not past a marker or break
+    let line_start = text.len() == line && !text.is_empty();
     let push_start_whitespace = (f_opts.inline || !follows_newline)
+        && !line_start
         && new_text.starts_with(|c: char| c.is_ascii_whitespace());
     let push_end_whitespace = new_text.ends_with(|c: char| c.is_ascii_whitespace());
 
@@ -21,13 +49,15 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
 
     let Some(first) = iter.next() else { return };
 
-    // only the first word of a text node can continue a Markdown line;
-    // a link body sits after its `[`, never at a line start
-    let is_line_start =
-        !f_opts.link_body && (text.is_empty() || text.ends_with('\n') || f_opts.list_item);
+    // only the first word of a text node can continue a Markdown line, also after spaces that
+    // a block drops; a link body sits after its `[`, never at a line start
+    let is_line_start = !f_opts.link_body
+        && text
+            .get(line..)
+            .is_some_and(|s| s.bytes().all(|b| b == b' '));
     if push_start_whitespace {
         text.push(' ');
-    } else if escape && matches!(first, "." | ")") && ends_with_marker_digits(text) {
+    } else if escape && matches!(first, "." | ")") && ends_with_marker_digits(text, line) {
         // `<span>1</span>. foo`: the digits already written at the line
         // start and this `.` would form an ordered-list marker
         text.push('\\');
@@ -38,22 +68,19 @@ pub(super) fn push_normalized_text(text: &mut String, new_text: &str, f_opts: Fo
         push_escaped_chunk(text, word, escape, false);
     }
 
-    if push_end_whitespace && !text.ends_with(|c: char| c.is_ascii_whitespace()) {
-        text.push(' ');
-    }
+    *space = push_end_whitespace && !text.ends_with(|c: char| c.is_ascii_whitespace());
 }
 
-/// True when `text` ends with one to nine digits that start a line, so a
+/// True when `text` ends with one to nine digits that start the line at `line`, so a
 /// following `.` or `)` would make an ordered-list marker.
-fn ends_with_marker_digits(text: &str) -> bool {
+fn ends_with_marker_digits(text: &str, line: usize) -> bool {
     // CommonMark ordered-list markers have one to nine digits
     let stem = text.trim_end_matches(|c: char| c.is_ascii_digit());
     if !(1..=9).contains(&(text.len() - stem.len())) {
         return false;
     }
     // the digits start the line when only indentation precedes them
-    let indent = stem.trim_end_matches(' ');
-    indent.is_empty() || indent.ends_with('\n')
+    stem.trim_end_matches(' ').len() <= line
 }
 
 /// An ordered-list marker like `3.` or `12)` at the beginning of a line would
@@ -164,13 +191,6 @@ pub(super) fn trim_trailing_space(s: &mut String) {
     s.truncate(s.trim_end_matches(' ').len());
 }
 
-pub(super) fn add_linebreaks(text: &mut String, linebreak: &str, end: &str) {
-    trim_trailing_space(text);
-    while !text.ends_with(end) {
-        text.push_str(linebreak);
-    }
-}
-
 /// Formats a Markdown link destination and writes it directly to the buffer.
 pub(super) fn push_md_url(text: &mut String, dest: &str) {
     let mut balance: i32 = 0;
@@ -224,10 +244,10 @@ pub(super) fn push_title(text: &mut String, title: &str) {
     text.push_str(" \"");
     if title.contains('"') {
         let mut normalized = String::with_capacity(title.len());
-        push_normalized_text(&mut normalized, title, FormatOpts::new());
+        push_normalized_text(&mut normalized, 0, title, FormatOpts::new());
         text.push_str(&normalized.replace('"', "\\\""));
     } else {
-        push_normalized_text(text, title, FormatOpts::new());
+        push_normalized_text(text, usize::MAX, title, FormatOpts::new());
     }
     text.push('"');
 }
@@ -236,19 +256,6 @@ pub(super) fn push_block_space(text: &mut String) {
     if !text.is_empty() && !text.ends_with(|c: char| c.is_ascii_whitespace()) {
         text.push(' ');
     }
-}
-
-pub(super) fn trim_space(s: &mut String) {
-    s.truncate(s.trim_ascii_end().len());
-    s.drain(..s.len() - s.trim_ascii_start().len());
-}
-
-pub(super) const fn linebreak(br: bool) -> &'static str {
-    if br { "<br>" } else { "\n" }
-}
-
-pub(super) const fn double_linebreak(br: bool) -> &'static str {
-    if br { "<br><br>" } else { "\n\n" }
 }
 
 /// Escapes special characters for HTML attribute values (quotes, ampersands, and &nbsp;).
@@ -312,7 +319,7 @@ mod tests {
         let t = r"Some text: x `y` *z* _w_ [v] <u> #h >q -l +m !i . .5 5. |q|";
         let mut text = String::new();
         // mid-line: only characters with Markdown meaning anywhere are escaped
-        push_normalized_text(&mut text, t, FormatOpts::new());
+        push_normalized_text(&mut text, 0, t, FormatOpts::new());
         assert_eq!(
             text,
             r"Some text: x \`y\` \*z\* \_w\_ \[v\] \<u> #h >q -l +m !i . .5 5. \|q\|"
@@ -329,13 +336,13 @@ mod tests {
 
         // a leading space written inline does not hide the line start
         let mut text = String::new();
-        push_normalized_text(&mut text, " # x", FormatOpts::new().inline());
+        push_normalized_text(&mut text, 0, " # x", FormatOpts::new().inline());
         assert_eq!(text, r" \# x");
 
         // escape: false is used for inline code content: only backticks are
         // escaped so they cannot terminate the code span
         let mut text = String::new();
-        push_normalized_text(&mut text, t, FormatOpts::new().skip_escape());
+        push_normalized_text(&mut text, 0, t, FormatOpts::new().skip_escape());
         assert_eq!(
             text,
             r"Some text: x `y` *z* _w_ [v] <u> #h >q -l +m !i . .5 5. |q|"

@@ -1,0 +1,164 @@
+/// The output text. Only this type writes line breaks, and each new line gets the prefix of
+/// the quotes and items around it before its first character.
+pub(super) struct Lines {
+    text: String,
+    prefix: String,
+    /// The length of the prefix an empty line takes: up to the last quote.
+    blank: usize,
+    /// The prefix is due before the next character; a line that ends first takes `blank`.
+    prefix_due: bool,
+    /// Where the content of the last line starts, if known: a fragment may start mid-line.
+    line_start: Option<usize>,
+    /// A table cell joins its lines with `<br>` and indents only marker lines.
+    cell: bool,
+}
+
+/// How much of the prefix was there before a quote or item added its part.
+#[derive(Clone, Copy, Default)]
+pub(super) struct PrefixMark {
+    len: usize,
+    blank: usize,
+}
+
+impl Lines {
+    pub(super) const fn new(text: String, cell: bool) -> Self {
+        Self {
+            text,
+            prefix: String::new(),
+            blank: 0,
+            prefix_due: false,
+            line_start: None,
+            cell,
+        }
+    }
+
+    #[inline]
+    pub(super) fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub(super) fn into_string(self) -> String {
+        self.text
+    }
+
+    pub(super) fn take(&mut self) -> String {
+        self.prefix_due = false;
+        self.line_start = None;
+        std::mem::take(&mut self.text)
+    }
+
+    #[inline]
+    pub(super) fn push_str(&mut self, s: &str) {
+        debug_assert!(!s.contains('\n'), "a line break goes through `new_line`");
+        if !s.is_empty() {
+            self.write_prefix();
+            self.text.push_str(s);
+        }
+    }
+
+    #[inline]
+    pub(super) fn push(&mut self, c: char) {
+        debug_assert!(c != '\n', "a line break goes through `new_line`");
+        self.write_prefix();
+        self.text.push(c);
+    }
+
+    /// Lets `edit` change the end of the current line, given where its content starts (0 if
+    /// unknown); it must not break the line.
+    pub(super) fn edit(&mut self, edit: impl FnOnce(&mut String, usize)) {
+        self.write_prefix();
+        let len = self.text.len();
+        edit(&mut self.text, self.line_start.unwrap_or(0));
+        debug_assert!(!self.text.get(len..).unwrap_or_default().contains('\n'));
+    }
+
+    /// Pushes `s`, breaking its lines with `new_line`.
+    pub(super) fn push_lines(&mut self, s: &str) {
+        let mut lines = s.split('\n');
+        self.push_str(lines.next().unwrap_or_default());
+        for line in lines {
+            self.new_line();
+            self.push_str(line);
+        }
+    }
+
+    pub(super) fn new_line(&mut self) {
+        if self.cell {
+            self.write_prefix();
+            self.text.push_str("<br>");
+            return;
+        }
+        if std::mem::take(&mut self.prefix_due) {
+            let blank = self.prefix.get(..self.blank).unwrap_or_default();
+            self.text.push_str(blank);
+        }
+        self.text.push('\n');
+        self.prefix_due = true;
+    }
+
+    /// Ends the line with a hard break.
+    pub(super) fn hard_break(&mut self) {
+        self.push_str("  ");
+        if self.cell {
+            self.text.push_str("<br>");
+        } else {
+            self.text.push('\n');
+        }
+        self.prefix_due = true;
+    }
+
+    /// The prefix goes before the next character, as on a line after a line break.
+    #[inline]
+    pub(super) const fn prefix_next(&mut self) {
+        self.prefix_due = true;
+    }
+
+    #[inline]
+    fn write_prefix(&mut self) {
+        if std::mem::take(&mut self.prefix_due) {
+            self.text.push_str(&self.prefix);
+            self.line_start = Some(self.text.len());
+        }
+    }
+
+    /// The content of the line starts here, after the markers written.
+    #[inline]
+    pub(super) fn mark_line_start(&mut self) {
+        self.write_prefix();
+        self.line_start = Some(self.text.len());
+    }
+
+    /// Whether nothing is written yet on a line.
+    #[inline]
+    pub(super) fn at_line_start(&self) -> bool {
+        self.prefix_due || self.line_start == Some(self.text.len())
+    }
+
+    pub(super) fn prefix_mark(&self) -> PrefixMark {
+        PrefixMark {
+            len: self.prefix.len(),
+            blank: self.blank,
+        }
+    }
+
+    pub(super) fn restore_prefix(&mut self, mark: PrefixMark) {
+        self.prefix.truncate(mark.len);
+        self.blank = mark.blank;
+    }
+
+    /// Writes a quote's `> `, which every line after it starts with too.
+    pub(super) fn push_quote(&mut self) {
+        self.push_str("> ");
+        self.prefix.push_str("> ");
+        self.blank = self.prefix.len();
+    }
+
+    /// Writes an item's marker after `indent` spaces; the lines after it start with as many
+    /// spaces as both take.
+    pub(super) fn push_marker(&mut self, indent: usize, marker: &str, width: usize) {
+        self.write_prefix();
+        self.text.extend(std::iter::repeat_n(' ', indent));
+        self.text.push_str(marker);
+        self.prefix.extend(std::iter::repeat_n(' ', indent + width));
+    }
+}

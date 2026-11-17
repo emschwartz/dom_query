@@ -3,14 +3,15 @@ use tendril::StrTendril;
 
 use crate::{Element, NodeId};
 
+use super::super::block::BlockWriter;
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
-use super::super::inline::{Inline, InlineWriter};
+use super::super::inline::Inline;
 use super::super::text_utils::{push_md_url, push_normalized_text, push_title};
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    out: &mut InlineWriter,
+    out: &mut BlockWriter,
     el: &Element,
     _id: NodeId,
     _opts: FormatOpts,
@@ -20,7 +21,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         text.push_str("![");
 
         if let Some(alt) = el.attr_ref(local_name!("alt")) {
-            push_normalized_text(&mut text, alt, FormatOpts::new());
+            push_normalized_text(&mut text, usize::MAX, alt, FormatOpts::new());
         }
         text.push(']');
         text.push('(');

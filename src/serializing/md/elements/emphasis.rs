@@ -1,16 +1,11 @@
-use std::fmt::Write;
-
 use html5ever::{QualName, local_name};
 
-use crate::{Element, NodeId, NodeRef};
+use crate::{Element, NodeId};
 
-use super::super::block::{is_block_wrapper, is_link_block};
+use super::super::block::{Block, BlockWriter, Paragraph, Separator, Start};
 use super::super::ctx::{EmphasisScope, FormatOpts};
 use super::super::host::MDHost;
-use super::super::inline::{Inline, InlineWriter};
-use super::super::serializer::add_block_end;
-use super::super::text_iter::Paragraphs;
-use super::super::text_utils::trim_trailing_space;
+use super::super::inline::Inline;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(in crate::serializing::md) enum Emphasis {
@@ -188,17 +183,9 @@ impl<'a> Edges<'a> {
     }
 }
 
-/// Ends the line with a hard break, unless a blank line already ends it.
-pub(in crate::serializing::md) fn push_hard_break(text: &mut String) {
-    if !text.ends_with("\n\n") {
-        trim_trailing_space(text);
-        text.push_str("  \n");
-    }
-}
-
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    out: &mut InlineWriter,
+    out: &mut BlockWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
@@ -211,73 +198,62 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     if opts.emphasis_scope.contains(kind.scope()) {
         return h.write_children(out, id, em_opts);
     }
-    let mut run = InlineWriter::new(h.take_buf());
-    h.write_children(&mut run, id, em_opts);
-    run.finish();
-
-    let content = &run.text;
-    // a run can't span a blank line, so each paragraph inside gets its own;
-    // `<br><br>` writes a blank line of spaces
-    if (content.contains("\n\n") || content.contains("\n  \n")) && holds_only_paragraphs(h, id) {
-        let mut body = content.as_str();
-        if starts_with_hard_break(body) {
-            body = &body[3..];
-            out.write_block(push_hard_break);
-        }
-        let mut parts = Paragraphs::new(body).peekable();
-        while let Some(part) = parts.next() {
-            let last = parts.peek().is_none();
-            // a hard break before the blank line is dropped, not left inside the run
-            let part = if last {
-                part
-            } else {
-                part.trim_end_matches(' ')
-            };
-            if holds_block(part) {
-                out.write_block(|text| push_html_block(text, part, kind, opts.offset));
-            } else {
-                out.push(Inline::Emphasis(
-                    kind,
-                    &mut InlineWriter::new(part.to_owned()),
-                ));
-            }
-            if !last {
-                out.write_block(|text| add_block_end(text, false));
-            }
-        }
-    } else if holds_block(content) {
-        out.write_block(|text| push_html_block(text, content, kind, opts.offset));
-    } else {
-        out.push(Inline::Emphasis(kind, &mut run));
+    let may_hold_blocks = !opts.link_body && !opts.table_cell && !opts.heading;
+    let mut run = BlockWriter::fragment(h.take_buf(), em_opts);
+    // a run can't span a blank line: each paragraph inside gets its own
+    if may_hold_blocks {
+        run.keep_paragraphs_apart();
     }
-    h.put_buf(run.text);
+    h.write_children(&mut run, id, em_opts);
+    if let Some(paragraphs) = run.take_paragraphs() {
+        for p in &paragraphs {
+            write_paragraph(out, kind, p);
+        }
+        return h.put_buf(run.finish());
+    }
+    let blocks = run.finish_fragment() && may_hold_blocks;
+    let content = run.content();
+    if blocks {
+        // no run wraps another block: each tag is an html block of its own
+        let tag = kind.tag();
+        out.owe(Separator::BlankLine);
+        out.push_block(Block::Html, &format!("<{tag}>"));
+        out.owe(Separator::BlankLine);
+        out.push_block(Block::Text, content.text.trim_matches([' ', '\n']));
+        out.owe(Separator::BlankLine);
+        out.push_block(Block::Html, &format!("</{tag}>"));
+        out.owe(Separator::BlankLine);
+    } else {
+        // a stray `<li>` starts a line of its own inside the run too
+        out.owe(run.lead());
+        out.push(Inline::Emphasis { kind, content });
+        out.owe(run.owed());
+    }
+    h.put_buf(run.finish());
+}
+
+/// Writes a paragraph kept apart as a run of its own, set off as it was.
+fn write_paragraph(out: &mut BlockWriter, kind: Emphasis, p: &Paragraph) {
+    let para = p.start == Start::Para;
+    if para {
+        out.open_paragraph();
+    }
+    out.owe(p.before);
+    let content = p.content();
+    out.push(Inline::Emphasis { kind, content });
+    for _ in 0..p.ends.breaks() {
+        out.hard_break(true);
+    }
+    if para {
+        out.close_paragraph();
+    }
 }
 
 /// A hard break at the start goes before the run, unless a blank line follows it.
-fn starts_with_hard_break(content: &str) -> bool {
+pub(in crate::serializing::md) fn starts_with_hard_break(content: &str) -> bool {
     content
         .strip_prefix("  \n")
         .is_some_and(|rest| !rest.trim_start_matches(' ').starts_with('\n'))
-}
-
-/// A newline that isn't a hard break comes from a block, which no run can wrap.
-fn holds_block(content: &str) -> bool {
-    content
-        .match_indices('\n')
-        .any(|(i, _)| !content[..i].ends_with("  "))
-}
-
-/// Whether the only blocks inside `id` are paragraphs and `<div>`-like wrappers.
-fn holds_only_paragraphs<H: MDHost>(h: &H, id: NodeId) -> bool {
-    NodeRef::new(id, h.tree()).descendants_it().all(|n| {
-        n.qual_name_ref().is_none_or(|name| match name.local {
-            local_name!("p") => true,
-            local_name!("pre") => false,
-            // a multi-line code span is written as a fence
-            local_name!("code") => !n.text().trim().contains('\n'),
-            _ => !is_link_block(&name) || is_block_wrapper(&name),
-        })
-    })
 }
 
 /// `CommonMark` whitespace (`Zs`, tab, form feed, carriage return), which is moved outside
@@ -307,17 +283,4 @@ fn is_flanking_safe(c: char) -> bool {
     (c.is_whitespace() && !matches!(c, '\u{b}' | '\u{85}' | '\u{2028}' | '\u{2029}'))
         || c.is_ascii_punctuation()
         || !c.is_alphanumeric() && PUNCTUATION.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
-}
-
-/// Around blocks, each tag is an html block of its own between blank lines.
-fn push_html_block(acc: &mut String, content: &str, kind: Emphasis, offset: usize) {
-    if !acc.is_empty() {
-        add_block_end(acc, false);
-    }
-    let tag = kind.tag();
-    let body = content.trim_matches(|c| c == ' ' || c == '\n');
-    // the block starts at the surrounding list's offset; later lines may be
-    // deeper, so their indent can't be used here
-    let pad = " ".repeat(offset);
-    let _ = write!(acc, "<{tag}>\n\n{pad}{body}\n\n</{tag}>\n\n");
 }

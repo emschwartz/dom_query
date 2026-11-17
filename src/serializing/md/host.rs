@@ -3,11 +3,11 @@ use std::ops::{Deref, DerefMut};
 
 use html5ever::QualName;
 
-use crate::node::{TreeNode, child_nodes};
+use crate::node::TreeNode;
 use crate::{NodeId, Tree};
 
+use super::block::BlockWriter;
 use super::ctx::FormatOpts;
-use super::inline::InlineWriter;
 
 /// A scratch buffer that returns to the host's pool when dropped.
 pub(super) struct ScratchBuf<'h, H: MDHost> {
@@ -56,22 +56,18 @@ pub(super) trait MDHost: Sized {
     /// and the next same-type list gets the opposite one.
     fn set_last_list(&self, list: NodeId, alt_marker: bool);
 
-    /// Writes `id` when `opts.include_node`, otherwise its children; trims unless included.
-    fn write_inline(&self, out: &mut InlineWriter, id: NodeId, opts: FormatOpts);
+    /// Writes `id` when `opts.include_node`, otherwise its children.
+    fn write(&self, out: &mut BlockWriter, id: NodeId, opts: FormatOpts);
 
-    /// Like `write_inline`, into block text: a separator left at either end is dropped.
-    fn write(&self, out: &mut String, id: NodeId, opts: FormatOpts) {
-        let mut inline = InlineWriter::new(std::mem::take(out));
-        self.write_inline(&mut inline, id, opts);
-        inline.finish();
-        *out = inline.text;
+    /// Writes `id` as a document of its own, in a buffer from the pool.
+    fn write_buf(&self, id: NodeId, opts: FormatOpts) -> String {
+        let mut out = BlockWriter::document(self.take_buf(), opts);
+        self.write(&mut out, id, opts);
+        out.finish()
     }
 
-    /// Writes each child in document order, without trimming.
-    fn write_children(&self, out: &mut InlineWriter, id: NodeId, opts: FormatOpts) {
-        let nodes = self.nodes();
-        for child in child_nodes(nodes, &id, false) {
-            self.write_inline(out, child, opts);
-        }
+    fn write_children(&self, out: &mut BlockWriter, id: NodeId, mut opts: FormatOpts) {
+        opts.include_node = false;
+        self.write(out, id, opts);
     }
 }

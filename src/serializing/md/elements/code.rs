@@ -6,22 +6,22 @@ use html5ever::local_name;
 use crate::node::{NodeData, TreeNode, ancestor_nodes, child_nodes, descendant_nodes};
 use crate::{Element, NodeId};
 
+use super::super::block::{Block, BlockWriter, Separator};
 use super::super::constants::{CODE_LANGUAGE_ATTRIBUTES, CODE_LANGUAGE_PREFIX};
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
-use super::super::inline::{Inline, InlineWriter};
-use super::super::text_utils::{push_block_space, push_escaped_pipes, trim_trailing_space};
-use super::table::add_cell_block_break;
+use super::super::inline::Inline;
+use super::super::text_utils::{push_escaped_pipes, trim_trailing_space};
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    out: &mut InlineWriter,
+    out: &mut BlockWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
 ) {
     if el.name.local == local_name!("pre") {
-        out.write_block(|text| write_pre(h, text, id, opts));
+        write_pre(h, out, id, opts);
     } else {
         write_code(h, out, id, opts);
     }
@@ -60,29 +60,34 @@ fn find_code_language_css_class<H: MDHost>(h: &H, id: NodeId) -> Option<String> 
 
 /// Transforms a `<pre>` code block, possibly with an associated language label that the resulting
 /// block is annotated with.
-fn write_pre<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) {
+fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOpts) {
     let nodes = h.nodes();
     let content = pre_text(&nodes, id);
+    let mut span = h.scratch();
 
     // a fence cannot go in link text; a code span keeps the text on one line
     if opts.link_body {
         let code_text = content.split_ascii_whitespace().collect::<Vec<_>>();
-        push_block_space(text);
-        push_code_text(text, &code_text.join(" "), opts.table_cell);
-        // only a following sibling needs a separator; no trailing space ends the label
-        if h.tree().next_sibling_of(&id).is_some() {
-            push_block_space(text);
+        push_code_text(&mut span, &code_text.join(" "), opts.table_cell);
+        out.owe(Separator::Space);
+        if !span.is_empty() {
+            out.push(Inline::Code(&span));
         }
+        out.owe(Separator::Space);
         return;
     }
 
     // a cell cannot hold a fence; each line becomes a code span, joined like cell blocks
     if opts.table_cell {
-        add_cell_block_break(text, "<br>");
+        out.owe(Separator::LineBreak);
         // a lone `\r` (possible via the DOM API) is a line ending too and would end the row
         for line in content.lines().flat_map(|l| l.split('\r')) {
-            push_code_text(text, line, true);
-            text.push_str("<br>");
+            span.clear();
+            push_code_text(&mut span, line, true);
+            if !span.is_empty() {
+                out.push(Inline::Code(&span));
+            }
+            out.push(Inline::HtmlBreak);
         }
         return;
     }
@@ -91,29 +96,21 @@ fn write_pre<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) 
     // otherwise an interior fence-length line terminates the block early
     // (CommonMark §fenced-code-blocks).
     let fence_len = max_backtick_run(&content).max(2) + 1;
-
-    // a fence interrupts a paragraph, so one line break is enough
-    trim_trailing_space(text);
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text.extend(std::iter::repeat_n('`', fence_len));
-
+    span.extend(std::iter::repeat_n('`', fence_len));
     if let Some(lang) = find_code_language(h, id) {
-        text.push_str(&lang);
+        span.push_str(&lang);
     }
-    text.push('\n');
-
-    text.push_str(&content);
-
-    // The closing fence goes on its own line; a final newline of the
-    // content already ends the last line, and empty content has no line.
-    if !content.is_empty() && !content.ends_with('\n') {
-        text.push('\n');
+    out.push_block(Block::CodeFence, &span);
+    // a final newline of the content already ends its last line
+    if !content.is_empty() {
+        out.push_block(
+            Block::CodeFence,
+            content.strip_suffix('\n').unwrap_or(&content),
+        );
     }
-
-    text.extend(std::iter::repeat_n('`', fence_len));
-    text.push('\n');
+    let fence = span.get(..fence_len).unwrap_or_default();
+    out.push_block(Block::CodeFence, fence);
+    out.owe(Separator::LineBreak);
 }
 
 /// The text of a `<pre>` block, with each `<br>` as a line break.
@@ -155,7 +152,7 @@ fn edge_line_breaks<H: MDHost>(h: &H, id: NodeId) -> (bool, bool) {
 /// Writes the content of the `<code>` block. Generally a `<code>` tag is used inline, but unfortunately
 /// it's also used instead of a `<pre>` block. In case the `<code>` block contains multiline
 /// text, it's handled as a `<pre>` code block.
-fn write_code<H: MDHost>(h: &H, out: &mut InlineWriter, id: NodeId, opts: FormatOpts) {
+fn write_code<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOpts) {
     let is_multiline = {
         let nodes = h.nodes();
         descendant_nodes(Ref::clone(&nodes), &id)
@@ -168,22 +165,20 @@ fn write_code<H: MDHost>(h: &H, out: &mut InlineWriter, id: NodeId, opts: Format
     };
 
     if is_multiline {
-        return out.write_block(|text| write_pre(h, text, id, opts));
+        return write_pre(h, out, id, opts);
     }
 
     // edge spaces are content, so keep them; whitespace around a line
     // break at an edge is source indentation
     let (starts_with_break, ends_with_break) = edge_line_breaks(h, id);
-    let mut code_text = String::new();
-    h.write(
-        &mut code_text,
-        id,
-        FormatOpts::new()
-            .include_node()
-            .inline()
-            .skip_escape()
-            .skip_md(),
-    );
+    let code_opts = FormatOpts::new()
+        .include_node()
+        .inline()
+        .skip_escape()
+        .skip_md();
+    let mut code = BlockWriter::fragment(h.take_buf(), code_opts);
+    h.write(&mut code, id, code_opts);
+    let mut code_text = code.finish();
     if ends_with_break {
         trim_trailing_space(&mut code_text);
     }
@@ -195,6 +190,7 @@ fn write_code<H: MDHost>(h: &H, out: &mut InlineWriter, id: NodeId, opts: Format
     if !span.is_empty() {
         out.push(Inline::Code(&span));
     }
+    h.put_buf(code_text);
 }
 
 fn find_code_lang_attribute(node: &TreeNode) -> Option<String> {
@@ -236,10 +232,6 @@ pub(in crate::serializing::md) fn ends_with_code_span(text: &str) -> bool {
 fn push_code_text(text: &mut String, code_text: &str, in_cell: bool) {
     if code_text.is_empty() {
         return;
-    }
-
-    if ends_with_code_span(text) {
-        text.push(' ');
     }
 
     let fence_len = max_backtick_run(code_text) + 1;

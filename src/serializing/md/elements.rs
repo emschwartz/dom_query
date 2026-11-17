@@ -2,9 +2,9 @@ use html5ever::local_name;
 
 use crate::{Element, NodeId};
 
+use super::block::BlockWriter;
 use super::ctx::FormatOpts;
 use super::host::MDHost;
-use super::inline::InlineWriter;
 
 pub(super) mod code;
 pub(super) mod emphasis;
@@ -17,7 +17,7 @@ pub(super) mod table;
 
 pub(super) fn write_element<H: MDHost>(
     h: &H,
-    out: &mut InlineWriter,
+    out: &mut BlockWriter,
     e: &Element,
     id: NodeId,
     opts: FormatOpts,
@@ -26,17 +26,17 @@ pub(super) fn write_element<H: MDHost>(
         // their markers cannot go in link text; their children are
         // written as plain blocks
         local_name!("ol") | local_name!("ul") if !opts.link_body => {
-            out.write_block(|text| list::write(h, text, e, id, opts));
+            list::write(h, out, e, id, opts);
         }
         // a cell holds no `>` lines: its quote is written as a plain block
         local_name!("blockquote") if !opts.link_body && !opts.table_cell => {
-            out.write_block(|text| quote::write(h, text, e, id, opts));
+            quote::write(h, out, id);
         }
         local_name!("table") if !opts.link_body => {
-            out.write_block(|text| table::write(h, text, e, id, opts));
+            table::write(h, out, id, opts);
         }
         local_name!("input") if opts.list_item && !opts.link_body && !opts.table_cell => {
-            out.write_block(|text| list::write_task_marker(h, text, e, id));
+            list::write_task_marker(h, out, e, id);
         }
         // no href: the contents are written in place, like any inline element
         local_name!("a") => match e.attr_ref(local_name!("href")) {
@@ -62,7 +62,7 @@ pub(super) fn write_element<H: MDHost>(
         | local_name!("h6")
             if !opts.link_body =>
         {
-            out.write_block(|text| heading::write(h, text, e, id, opts));
+            heading::write(h, out, e, id, opts);
         }
         _ => return false,
     }

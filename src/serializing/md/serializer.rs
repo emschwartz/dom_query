@@ -238,6 +238,10 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
             out.push(Inline::HtmlBreak);
         } else {
             out.hard_break(name.local == local_name!("br"));
+            // an item that wrote nothing still sets the text around it apart, as on main
+            if name.local == local_name!("li") && out.owed() >= Separator::LineBreak {
+                out.owe(Separator::BlankLine);
+            }
         }
     } else if matches!(name.local, local_name!("td") | local_name!("th")) {
         // a table written as text keeps its cells apart

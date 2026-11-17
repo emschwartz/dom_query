@@ -2458,6 +2458,12 @@ The wind is passing by.
     }
 
     #[test]
+    fn test_empty_list_item_separates_text() {
+        html_2md_compare("a<li></li>b", "a\n\nb");
+        html_2md_compare("a<div></div>b", "a\n\nb");
+    }
+
+    #[test]
     fn test_table_inside_table() {
         let contents = "<table>
     <tr>

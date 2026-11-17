@@ -2434,6 +2434,11 @@ The wind is passing by.
             "<table><caption> </caption><tr><th>h</th></tr><tr><td>x</td></tr></table>",
             "| h |\n| - |\n| x |",
         );
+        // an empty caption leaves a tight list tight
+        html_2md_compare(
+            "<ul><li>x</li><li><table><caption></caption><tr><th>h</th></tr><tr><td>y</td></tr></table></li></ul>",
+            "- x\n- | h |\n  | - |\n  | y |",
+        );
         html_2md_compare(
             "<ul><li>t<table><caption>Cap</caption><tr><th>h</th></tr><tr><td>x</td></tr></table></li></ul>",
             "- t\n\n  Cap\n\n  | h |\n  | - |\n  | x |",
@@ -3551,6 +3556,13 @@ fn main() {
     #[test]
     fn test_emphasis_around_block() {
         html_2md_compare("<em><p>a</p></em>", "*a*");
+        // a space after the last paragraph kept apart stays after its run
+        html_2md_compare("<div><b><p>a</p>b </b>y</div>", "**a**\n\n**b** y");
+        // joining the paragraphs for a block keeps the blank line owed after the last
+        html_2md_compare(
+            "<b><p>a</p><p>b</p><li>c</li></b>",
+            "<strong>\n\na\n\nb\n\nc\n\n</strong>",
+        );
         // a block that is all of a run is still a block: a rule stays a rule
         html_2md_compare("<b><hr></b>", "<strong>\n\n---\n\n</strong>");
         html_2md_compare("<i><hr></i>x", "<em>\n\n---\n\n</em>\n\nx");

@@ -327,6 +327,8 @@ impl BlockWriter {
             return None;
         }
         self.paragraph.finish(&mut self.lines);
+        // a space at the end goes after the last run, as in `finish_fragment`
+        self.paragraph.end_space(&mut self.lines, true);
         let owed = std::mem::take(&mut self.owed);
         let mut paragraphs = self.paragraphs.take()?;
         self.keep_paragraph(&mut paragraphs);
@@ -344,6 +346,8 @@ impl BlockWriter {
             return;
         }
         self.keep_paragraph(&mut paragraphs);
+        // what is owed after the last paragraph stays owed after it
+        let after = self.owed;
         for (i, p) in paragraphs.into_iter().enumerate() {
             if i > 0 {
                 self.owed = p.before;
@@ -352,6 +356,7 @@ impl BlockWriter {
             self.lines.push_lines(&p.text);
             self.paragraph = p.ends;
         }
+        self.owed = after;
     }
 
     /// Moves the paragraph written to the last of `paragraphs`.
@@ -525,6 +530,10 @@ impl BlockWriter {
 
     /// Writes `block`, each of its `lines` on an output line of its own.
     pub(super) fn push_block(&mut self, block: Block, lines: &str) {
+        // a block that writes nothing leaves no trace, like an empty `<p>`
+        if lines.is_empty() {
+            return;
+        }
         self.join_paragraphs();
         // a block that starts a fragment writes no line break before it, but is one
         self.wrote_block = true;

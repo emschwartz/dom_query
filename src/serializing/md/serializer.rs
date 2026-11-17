@@ -256,8 +256,21 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
 #[allow(clippy::string_slice, clippy::indexing_slicing)]
 mod tests {
 
+    use super::super::block::{BlockEnd, LinePrefix, Preceding};
     use super::*;
     use crate::Document;
+
+    #[test]
+    fn test_block_with_text_only_on_a_middle_line_sets_its_item_end() {
+        let mut out = BlockWriter::document(String::new(), FormatOpts::new());
+        out.open_prefix(LinePrefix::ListItem {
+            marker: "- ".to_string(),
+            preceding: Preceding::Nothing,
+        });
+        out.push_raw("a");
+        out.push_block(Block::Html, "\n<x>\n");
+        assert!(out.close_prefix() == Some(BlockEnd::Html));
+    }
 
     #[test]
     fn test_scratch_reuses_buffer() {

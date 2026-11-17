@@ -554,32 +554,28 @@ impl BlockWriter {
         self.owe(Separator::LineBreak);
         if first.is_empty() {
             let _ = self.write_separator(start, None);
-            self.owed = Separator::LineBreak;
             self.line_open = true;
         } else {
             self.start_content(start, Some(first));
             self.inline.push_raw(&mut self.lines, first);
-            // its spaces are content
-            self.lines.mark_line_start();
-            self.inline.end_line();
-            self.set_item_end(end);
         }
         // the lines after the first are not blocks of their own: they only break the line
-        let mut last = None;
+        let (mut last, mut wrote_text) = (first, !first.is_empty());
         for line in rest {
             self.lines.new_line();
             self.lines.push_str(line);
-            last = Some(line);
+            (last, wrote_text) = (line, wrote_text || !line.is_empty());
         }
-        match last {
-            Some("") => self.owed = Separator::LineBreak,
-            Some(_) => {
-                self.owed = Separator::None;
-                self.lines.mark_line_start();
-                self.inline.end_line();
-                self.set_item_end(end);
-            }
-            None => {}
+        // an empty last line still owes its line break; a written one's spaces are content
+        if last.is_empty() {
+            self.owed = Separator::LineBreak;
+        } else {
+            self.owed = Separator::None;
+            self.lines.mark_line_start();
+        }
+        if wrote_text {
+            self.inline.end_line();
+            self.set_item_end(end);
         }
     }
 

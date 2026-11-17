@@ -122,6 +122,8 @@ mod tests {
 
     #[test]
     fn test_headings() {
+        // a heading that holds only a blank <pre> is empty
+        html_2md_compare("<h1><pre> </pre></h1>", "#");
         // the whole body, with include_node: true, still has no blank lines at its edges
         let contents = r"<h1>Heading 1</h1>
         <h2>Heading 2</h2>
@@ -1942,6 +1944,8 @@ Another Paragraph";
 
     #[test]
     fn test_images() {
+        // a space at the end of the alt text stays
+        html_2md_compare("<p><img src=\"u\" alt=\"a \"></p>", "![a ](u)");
         let simple_contents = r#"<p>Image: <img src="/path/to/img.jpg" alt="Alt text"></p>"#;
         let simple_expected = "Image: ![Alt text](/path/to/img.jpg)";
         html_2md_compare(simple_contents, simple_expected);
@@ -1995,6 +1999,8 @@ Another Paragraph";
 
     #[test]
     fn test_whitespace_only_link() {
+        // a code span of one space is the whole label
+        html_2md_compare("<a href=\"u\"><code> </code></a>", "[` `](u)");
         html_2md_compare(
             "<h2>VMAF <a href=\"#vmaf\"> </a></h2><p>body</p>",
             "## VMAF\n\nbody",
@@ -3339,6 +3345,8 @@ fn main() {
 
     #[test]
     fn test_pre_with_trailing_newline() {
+        // a blank last line is content
+        html_2md_compare("<pre>a\n\n</pre>", "```\na\n\n```");
         // the content's final newline must not become an extra empty line
         let md = "```\na\nb\n```";
         html_2md_compare("<pre>a\nb\n</pre>", md);
@@ -3346,6 +3354,10 @@ fn main() {
 
     #[test]
     fn test_emphasis_boundary_whitespace() {
+        // a space between two runs keeps the bold run apart from the italic one
+        html_2md_compare("<p><b><em>x</em></b> <b>y</b></p>", "***x*** **y**");
+        // a run that starts with a space joins the one before it
+        html_2md_compare("<p><i>~</i><em> y</em></p>", "*\\~ y*");
         // CommonMark requires an opening delimiter to be followed, and a closing
         // delimiter to be preceded, by a non-whitespace character. Whitespace
         // staying inside the delimiter run renders as literal `**`/`*`.
@@ -3639,6 +3651,11 @@ fn main() {
 
     #[test]
     fn test_emphasis_around_block() {
+        // a hard break at the start of a run still ends the line
+        html_2md_compare("<p><b>a</b><strong><br>b</strong></p>", "**a**  \n**b**");
+        html_2md_compare("<p><em>.</em><b><br>a</b></p>", "*.*  \n**a**");
+        // a block starts on its own line after text
+        html_2md_compare("a<b><i><li>y</li></i></b>", "a\n***y***");
         html_2md_compare("<em><p>a</p></em>", "*a*");
         // a space after the last paragraph kept apart stays after its run
         html_2md_compare("<div><b><p>a</p>b </b>y</div>", "**a**\n\n**b** y");
@@ -3699,7 +3716,7 @@ fn main() {
         html_2md_compare("<p><em>a<br><br><br>b</em></p>", "*a*\n\n*b*");
         html_2md_compare("<p><em>a<br><br></em>b</p>", "*a*\n\nb");
         html_2md_compare("<p>x<em><br><br>b</em></p>", "x\n\n*b*");
-        // more hard breaks than a narrow counter holds
+        // 255 hard breaks still end the paragraph
         let many = format!("<p>a{}<em><br>x</em></p>", "<br>".repeat(255));
         html_2md_compare(&many, "a\n\n*x*");
         html_2md_compare("<p><b>a<br>b<br><br>c</b>d</p>", "**a  \nb**\n\n**c**d");

@@ -104,6 +104,20 @@ impl InlineWriter {
         }
     }
 
+    /// Writes a text node; with no separator, run or break waiting, the common case, it skips
+    /// `push`.
+    #[inline]
+    pub(super) fn push_text(&mut self, out: &mut Lines, s: &str, opts: FormatOpts) {
+        if self.separator_after || self.pending.is_some() || self.breaks > 0 {
+            return self.push(out, Inline::Text(s, opts));
+        }
+        let (Some(first), Some(last)) = (s.chars().next(), s.chars().next_back()) else {
+            return;
+        };
+        self.push_words(out, s, opts);
+        self.wrote(first, last, Written::Char(last));
+    }
+
     fn push_words(&mut self, out: &mut Lines, s: &str, opts: FormatOpts) {
         // whitespace shows nothing at a line start
         if self.at_line_start(out) && s.trim_ascii().is_empty() {
@@ -311,9 +325,11 @@ impl InlineWriter {
         self.write_breaks(out);
         let spaced = self.space;
         self.write_space(out);
-        if !owed {
-            return spaced;
-        }
+        (owed && self.write_separator_space(out)) || spaced
+    }
+
+    #[cold]
+    fn write_separator_space(&mut self, out: &mut Lines) -> bool {
         let mut wrote = false;
         out.edit(|text, _| {
             let len = text.len();
@@ -321,7 +337,7 @@ impl InlineWriter {
             wrote = text.len() != len;
         });
         self.written = Written::Char(' ');
-        spaced || wrote
+        wrote
     }
 
     /// Holds the run until what follows is known: edges go outside its delimiters, and a run of
@@ -396,6 +412,7 @@ impl InlineWriter {
     }
 
     /// Writes the pending run, with delimiters if they fit before `after`, else as html.
+    #[inline]
     fn settle(&mut self, out: &mut Lines, after: Option<char>) {
         if self.pending.is_some() {
             self.write_pending(out, after);

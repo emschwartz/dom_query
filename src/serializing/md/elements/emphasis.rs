@@ -209,7 +209,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         for p in &paragraphs {
             write_paragraph(out, kind, p);
         }
-        return h.put_buf(run.finish());
+        return h.put_buf(run.into_buf());
     }
     let blocks = run.finish_fragment() && may_hold_blocks;
     let content = run.content();
@@ -229,7 +229,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         out.push(Inline::Emphasis { kind, content });
         out.owe(run.owed());
     }
-    h.put_buf(run.finish());
+    h.put_buf(run.into_buf());
 }
 
 /// Writes a paragraph kept apart as a run of its own, set off as it was.

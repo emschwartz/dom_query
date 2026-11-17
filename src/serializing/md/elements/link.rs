@@ -36,7 +36,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             href,
             title: None,
         });
-        return h.put_buf(writer.finish());
+        return h.put_buf(writer.into_buf());
     }
 
     // text before the link must not join the paragraph its first block starts
@@ -53,7 +53,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 
     let title = el.attr_ref(local_name!("title"));
     out.push(Inline::Link { label, href, title });
-    h.put_buf(writer.finish());
+    h.put_buf(writer.into_buf());
 
     // text after the link must not join the paragraph its last block ended
     if ends_with_block(&node) {

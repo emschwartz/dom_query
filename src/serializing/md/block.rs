@@ -95,10 +95,7 @@ impl Separator {
             Self::None => {}
             Self::Space => lines.edit(|text, _| push_block_space(text)),
             Self::LineBreak => lines.new_line(),
-            Self::BlankLine => {
-                lines.new_line();
-                lines.new_line();
-            }
+            Self::BlankLine => lines.blank_line(),
         }
     }
 }
@@ -228,6 +225,7 @@ impl Paragraph {
         }
     }
 
+    #[inline]
     pub(super) fn content(&self) -> Fragment<'_> {
         Fragment {
             text: &self.text,
@@ -288,6 +286,7 @@ pub(super) struct BlockWriter {
 impl BlockWriter {
     /// Text a parent places inside a line of its own, such as an emphasis run, a link label
     /// or a cell; `buf` is an empty buffer to write it to.
+    #[inline]
     pub(super) fn fragment(buf: String, opts: FormatOpts) -> Self {
         Self {
             lines: Lines::new(buf, opts.table_cell),
@@ -306,12 +305,14 @@ impl BlockWriter {
     }
 
     /// Keeps each paragraph apart, for emphasis to give each a run of its own.
+    #[inline]
     pub(super) fn keep_paragraphs_apart(&mut self) {
         self.paragraphs = Some(Vec::new());
     }
 
     /// The paragraphs kept apart, if a line break came before or between them; what is owed
     /// after them comes last, as an empty paragraph.
+    #[inline]
     pub(super) fn take_paragraphs(&mut self) -> Option<Vec<Paragraph>> {
         let set_off =
             |ps: &Vec<Paragraph>| ps.first().is_some_and(|p| p.before >= Separator::LineBreak);
@@ -393,7 +394,14 @@ impl BlockWriter {
         self.owed
     }
 
+    /// The buffer written to, once its content is placed.
+    #[inline]
+    pub(super) fn into_buf(self) -> String {
+        self.lines.into_string()
+    }
+
     /// The inline content written, for a parent to place; see `finish_fragment`.
+    #[inline]
     pub(super) fn content(&self) -> Fragment<'_> {
         Fragment {
             text: self.lines.as_str(),
@@ -426,7 +434,10 @@ impl BlockWriter {
         } {
             return;
         }
-        self.paragraph.push(&mut self.lines, inline);
+        match inline {
+            Inline::Text(s, opts) => self.paragraph.push_text(&mut self.lines, s, opts),
+            inline => self.paragraph.push(&mut self.lines, inline),
+        }
     }
 
     /// Writes a text node; text that continues the line, the common case, skips `push`.
@@ -437,7 +448,7 @@ impl BlockWriter {
         {
             return self.push(Inline::Text(s, opts));
         }
-        self.paragraph.push(&mut self.lines, Inline::Text(s, opts));
+        self.paragraph.push_text(&mut self.lines, s, opts);
     }
 
     /// Whether `inline` shows content, which needs what is owed written before it.
@@ -470,7 +481,8 @@ impl BlockWriter {
         } else {
             sep
         };
-        if sep >= Separator::LineBreak {
+        // a paragraph ends once
+        if sep >= Separator::LineBreak && self.owed < Separator::LineBreak {
             self.end_paragraph(true);
         } else if sep == Separator::Space {
             self.paragraph.finish(&mut self.lines);

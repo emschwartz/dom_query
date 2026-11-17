@@ -5,7 +5,7 @@ use tendril::StrTendril;
 
 use crate::{Element, NodeId, Tree};
 
-use crate::node::{NodeData, NodeRef, SerializeOp, TreeNode, child_nodes};
+use crate::node::{NodeData, NodeRef, TreeNode, child_nodes};
 
 use super::block::{
     Block, BlockWriter, Separator, is_block_wrapper, is_link_block, is_md_block, is_spaced_inline,
@@ -24,6 +24,8 @@ pub struct MDSerializer<'a> {
     depth: Cell<usize>,
     // at most one per nesting level, freed with the serializer
     bufs: RefCell<Vec<String>>,
+    /// Stacks of nodes to write, reused by nested `write` calls so none allocates its own.
+    op_stacks: RefCell<Vec<Vec<Op>>>,
 }
 
 impl<'a> MDSerializer<'a> {
@@ -37,6 +39,7 @@ impl<'a> MDSerializer<'a> {
             last_list: Cell::new(None),
             depth: Cell::new(0),
             bufs: RefCell::default(),
+            op_stacks: RefCell::default(),
         }
     }
 
@@ -100,6 +103,13 @@ fn open_block(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
     }
 }
 
+/// A step of `write`; a close knows whether its element is a block (`is_link_block`).
+enum Op {
+    Open(NodeId),
+    /// an element whose children are written; whether it is a block
+    Close(NodeId, bool),
+}
+
 /// A boundary that keeps words apart: a block in code (md skipped), an option or svg elsewhere.
 fn is_separator(name: &QualName, opts: FormatOpts) -> bool {
     if opts.skip_md {
@@ -149,15 +159,16 @@ impl MDHost for MDSerializer<'_> {
     }
 
     fn write(&self, out: &mut BlockWriter, root_id: NodeId, opts: FormatOpts) {
-        let children = |id| child_nodes(Ref::clone(&self.nodes), &id, true).map(SerializeOp::Open);
-        let mut ops: Vec<_> = if opts.include_node {
-            vec![SerializeOp::Open(root_id)]
+        let mut ops = self.op_stacks.borrow_mut().pop().unwrap_or_default();
+        let children = |id| child_nodes(Ref::clone(&self.nodes), &id, true).map(Op::Open);
+        if opts.include_node {
+            ops.push(Op::Open(root_id));
         } else {
-            children(root_id).collect()
-        };
+            ops.extend(children(root_id));
+        }
         while let Some(op) = ops.pop() {
             match op {
-                SerializeOp::Open(id) => {
+                Op::Open(id) => {
                     let node = &self.nodes[id.value()];
                     match &node.data {
                         NodeData::Text { contents } => out.push_text(contents, opts),
@@ -165,11 +176,12 @@ impl MDHost for MDSerializer<'_> {
                             if self.is_skipped(&e.name) {
                                 continue;
                             }
+                            let block = is_link_block(&e.name);
                             if is_separator(&e.name, opts) {
                                 out.push(Inline::Separator);
                             }
                             if !opts.skip_md {
-                                if is_link_block(&e.name) {
+                                if block {
                                     open_block(out, &e.name, opts);
                                 }
                                 // delegate serialization if the element has its own custom handler
@@ -177,22 +189,27 @@ impl MDHost for MDSerializer<'_> {
                                     continue;
                                 }
                             }
-                            ops.push(SerializeOp::Close(&e.name));
+                            ops.push(Op::Close(id, block));
                             ops.extend(children(id));
                         }
                         _ => {}
                     }
                 }
-                SerializeOp::Close(name) => {
+                Op::Close(id, block) => {
+                    let Some(name) = self.nodes.get(id.value()).and_then(|n| n.as_element()) else {
+                        continue;
+                    };
+                    let name = &name.name;
                     if is_separator(name, opts) {
                         out.push(Inline::Separator);
                     }
-                    if is_link_block(name) || name.local == local_name!("br") {
+                    if block || name.local == local_name!("br") {
                         close_element(out, name, opts);
                     }
                 }
             }
         }
+        self.op_stacks.borrow_mut().push(ops);
     }
 }
 

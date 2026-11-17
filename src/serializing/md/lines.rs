@@ -65,6 +65,7 @@ impl Lines {
 
     /// Lets `edit` change the end of the current line, given where its content starts (0 if
     /// unknown); it must not break the line.
+    #[inline]
     pub(super) fn edit(&mut self, edit: impl FnOnce(&mut String, usize)) {
         self.write_prefix();
         let len = self.text.len();
@@ -73,6 +74,7 @@ impl Lines {
     }
 
     /// Pushes `s`, breaking its lines with `new_line`.
+    #[inline]
     pub(super) fn push_lines(&mut self, s: &str) {
         let mut lines = s.split('\n');
         self.push_str(lines.next().unwrap_or_default());
@@ -96,6 +98,23 @@ impl Lines {
         self.prefix_due = true;
     }
 
+    /// Ends the line, and leaves the next empty.
+    pub(super) fn blank_line(&mut self) {
+        if self.cell {
+            self.write_prefix();
+            self.text.push_str("<br><br>");
+            return;
+        }
+        let blank = self.prefix.get(..self.blank).unwrap_or_default();
+        if std::mem::take(&mut self.prefix_due) {
+            self.text.push_str(blank);
+        }
+        self.text.push('\n');
+        self.text.push_str(blank);
+        self.text.push('\n');
+        self.prefix_due = true;
+    }
+
     /// Ends the line with a hard break.
     pub(super) fn hard_break(&mut self) {
         self.push_str("  ");
@@ -115,10 +134,16 @@ impl Lines {
 
     #[inline]
     fn write_prefix(&mut self) {
-        if std::mem::take(&mut self.prefix_due) {
-            self.text.push_str(&self.prefix);
-            self.line_start = Some(self.text.len());
+        if self.prefix_due {
+            self.write_due_prefix();
         }
+    }
+
+    #[cold]
+    fn write_due_prefix(&mut self) {
+        self.prefix_due = false;
+        self.text.push_str(&self.prefix);
+        self.line_start = Some(self.text.len());
     }
 
     /// The content of the line starts here, after the markers written.

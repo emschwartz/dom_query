@@ -3514,6 +3514,25 @@ fn main() {
         );
         // `***a*b**` would fuse the openers into a run that the `*` after `a` closes early
         html_2md_compare("<p><b><i>a</i>b</b></p>", "<strong>*a*b</strong>");
+        // an opener joining the closer before it (`**Hi***bar`) makes a run that `r**z` closes
+        html_2md_compare(
+            "<p><b>Hi</b><em>bar<b>z</b>x</em></p>",
+            "**Hi**<em>bar**z**x</em>",
+        );
+        html_2md_compare(
+            r#"<p><b>Hi</b><em>bar<b>z!</b><em><a href="/u">q</a></em></em></p>"#,
+            "**Hi**<em>bar**z!**[q](/u)</em>",
+        );
+        // or that a nested opener joins too (`**a*****a.**`)
+        html_2md_compare(
+            "<p><b>a</b><em><b>a.</b>.</em></p>",
+            "**a**<em>**a.**.</em>",
+        );
+        // a delimiter between punctuation (`.*.`) can close the fused opener early too
+        html_2md_compare(
+            "<p><b><em>a</em></b><b>.<em>.</em></b></p>",
+            "<strong>*a*.*.*</strong>",
+        );
     }
 
     #[test]

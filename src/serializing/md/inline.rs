@@ -430,7 +430,9 @@ impl InlineWriter {
             .next()
             .or(if run.breaks { Some('\n') } else { after });
         let (kind, start) = (run.kind, run.start);
-        if !start.fuses(kind) && kind.fits(start.before(kind), &run.content, after) {
+        if !start.fuses(kind, &run.content)
+            && kind.fits(start.before(kind), start.joins(kind), &run.content, after)
+        {
             let (marker, delim) = (kind.marker(), kind.delimiter());
             out.push_str(marker);
             out.push_lines(&run.content);
@@ -495,11 +497,17 @@ impl Written {
         }
     }
 
-    /// Whether an opening delimiter of `kind` here would fuse with the closing one before it:
-    /// `**a***b*` works, `**a****b**` and `***a*****b**` don't.
-    fn fuses(self, kind: Emphasis) -> bool {
+    /// Whether an opening delimiter of `kind` here joins the closing one before it into one run.
+    fn joins(self, kind: Emphasis) -> bool {
+        matches!(self, Self::Closing { kind: k, .. } if k.delimiter() == kind.delimiter())
+    }
+
+    /// Whether an opening delimiter of `kind` before `content` would fuse with the closing one
+    /// before it: `**a***b*` works, `**a****b**`, `***a*****b**` and `**a*****b**c*` don't.
+    fn fuses(self, kind: Emphasis, content: &str) -> bool {
         matches!(self, Self::Closing { kind: k, nested, .. }
-            if k.delimiter() == kind.delimiter() && (k == kind || nested))
+            if k.delimiter() == kind.delimiter()
+                && (k == kind || nested || content.starts_with(kind.delimiter())))
     }
 }
 

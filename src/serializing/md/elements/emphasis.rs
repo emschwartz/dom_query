@@ -57,14 +57,16 @@ impl Emphasis {
 
     /// Whether delimiters fit around `content` between the source characters `before` and
     /// `after` (`None` is a line edge or markup), looking past nested delimiters at its edges.
+    /// `joined`: the opening delimiter extends a closing delimiter run written right before it.
     pub(in crate::serializing::md) fn fits(
         self,
         before: Option<char>,
+        joined: bool,
         content: &str,
         after: Option<char>,
     ) -> bool {
         let delim = self.delimiter();
-        if fuses_ambiguously(content, delim) {
+        if fuses_ambiguously(joined, content, delim) {
             return false;
         }
         let first = content.trim_start_matches(delim).chars().next();
@@ -102,20 +104,34 @@ fn opens(before: Option<char>, first: char) -> bool {
     first.is_alphanumeric() || before.is_none_or(is_flanking_safe)
 }
 
-/// Whether a delimiter opening `content` would fuse with a nested one into a run that a
-/// delimiter inside a word (`x**y`) closes early, by `CommonMark`'s rule of three.
-fn fuses_ambiguously(content: &str, delim: char) -> bool {
-    let (bytes, delim) = (content.as_bytes(), delim as u8);
-    bytes.first() == Some(&delim)
-        && bytes.windows(2).enumerate().any(|(i, w)| {
-            // a delimiter run starts at `i + 1`, right after a letter, and a letter ends it
-            matches!(w, &[a, b] if a.is_ascii_alphanumeric() && b == delim)
-                && bytes
-                    .iter()
-                    .skip(i + 1)
-                    .find(|&&b| b != delim)
-                    .is_some_and(u8::is_ascii_alphanumeric)
-        })
+/// Whether a delimiter opening `content` would fuse with a nested one, or with a closing one
+/// before it (`joined`), into a run that a delimiter inside `content` closes early.
+fn fuses_ambiguously(joined: bool, content: &str, delim: char) -> bool {
+    if !joined && !content.starts_with(delim) {
+        return false;
+    }
+    let (mut prev, mut escaped) = (None, false);
+    let mut chars = content.chars();
+    while let Some(c) = chars.next() {
+        let starts_run = c == delim && !escaped && prev.is_some_and(|p| p != delim);
+        if starts_run && let Some(before) = prev {
+            let after = chars.clone().find(|&n| n != delim);
+            if after.is_some_and(|after| opens_and_closes(before, after)) {
+                return true;
+            }
+        }
+        escaped = c == '\\' && !escaped;
+        prev = Some(c);
+    }
+    false
+}
+
+/// Whether a delimiter run between `before` and `after` can both open and close: neither is
+/// whitespace, and both are punctuation or neither is (`x**y`, `.**.`).
+fn opens_and_closes(before: char, after: char) -> bool {
+    !before.is_whitespace()
+        && !after.is_whitespace()
+        && is_flanking_safe(before) == is_flanking_safe(after)
 }
 
 /// Whether the delimiters of runs nested at the end of `left` and the start of `right`

@@ -57,7 +57,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             }
             continue;
         }
-        run = None;
+        finish_run(&mut run, text);
         // a marker after a lazy line starts the next item of the list above
         let lazy = lazy_stray.take().is_some_and(|lazy| {
             end_stray_line(text);
@@ -85,6 +85,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         prev_item = Some(item.last);
         h.put_buf(item.body);
     }
+    finish_run(&mut run, text);
     if has_items {
         h.set_last_list(id, use_alt_marker);
     }
@@ -112,13 +113,45 @@ fn write_stray<H: MDHost>(
     // a stray child keeps the cell rules, like the link label does
     let mut opts = FormatOpts::new().include_node();
     opts.table_cell = cell;
-    let at = text.len();
-    h.write_continuing(text, node.id, opts, run);
-    let wrote = text.len() != at;
+    let wrote = write_continuing(h, text, node.id, opts, run);
     if !wrote {
         text.truncate(mark);
     }
     wrote
+}
+
+/// Like `h.write`, continuing `run`, the inline text an earlier write left open in `out`, and
+/// leaving this one's open; returns whether it added anything, a held emphasis run included.
+fn write_continuing<H: MDHost>(
+    h: &H,
+    out: &mut String,
+    id: NodeId,
+    opts: FormatOpts,
+    run: &mut Option<InlineWriter>,
+) -> bool {
+    let text = std::mem::take(out);
+    let mut inline = match run.take() {
+        Some(mut run) => {
+            run.text = text;
+            run
+        }
+        None => InlineWriter::new(text),
+    };
+    let (len, pending) = (inline.text.len(), inline.pending_len());
+    h.write_inline(&mut inline, id, opts);
+    let wrote = inline.text.len() != len || inline.pending_len() != pending;
+    *out = std::mem::take(&mut inline.text);
+    *run = Some(inline);
+    wrote
+}
+
+/// Writes what `run` holds back into `out`, before anything else writes to `out`.
+fn finish_run(run: &mut Option<InlineWriter>, out: &mut String) {
+    if let Some(mut run) = run.take() {
+        run.text = std::mem::take(out);
+        run.finish();
+        *out = run.text;
+    }
 }
 
 /// Ends the stray text before a marker: its hard breaks only end its line, or with a
@@ -307,18 +340,21 @@ impl Item {
             }
             if !node_is_block(&c) {
                 let (opts, mark) = (opts.offset(item.list_offset(false)), buf.len());
-                h.write_continuing(buf, c.id, opts, &mut run);
+                let wrote_any = write_continuing(h, buf, c.id, opts, &mut run);
                 // a child that wrote no text shows none in a `<p>`; an emphasis run that
-                // joins the one before rewrites the text before `mark`
-                if buf.get(mark..).is_none_or(|w| !w.trim_ascii().is_empty()) {
+                // is still pending, or joins the one before, leaves nothing past `mark`
+                let shown = buf
+                    .get(mark..)
+                    .is_none_or(|w| w.is_empty() || !w.trim_ascii().is_empty());
+                if wrote_any && shown {
                     wrote.push(c);
                 }
                 continue;
             }
+            finish_run(&mut run, buf);
             let may_para = para_break(buf, cell);
             item.push(buf, || may_para && wrote.iter().any(has_para), false);
             wrote.clear();
-            run = None;
             let is_list = node_is_list(&c);
             if c.has_name("hr") {
                 // a cell has no line for a rule; the blocks around it stay apart
@@ -333,6 +369,7 @@ impl Item {
             }
             item.push(buf, || has_para(&c), is_list);
         }
+        finish_run(&mut run, buf);
         let may_para = para_break(buf, cell);
         item.push(buf, || may_para && wrote.iter().any(has_para), false);
         item

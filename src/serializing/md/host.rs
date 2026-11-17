@@ -63,29 +63,8 @@ pub(super) trait MDHost: Sized {
     fn write(&self, out: &mut String, id: NodeId, opts: FormatOpts) {
         let mut inline = InlineWriter::new(std::mem::take(out));
         self.write_inline(&mut inline, id, opts);
+        inline.finish();
         *out = inline.text;
-    }
-
-    /// Like `write`, continuing `run`, the inline text an earlier write left in `out`,
-    /// if nothing changed `out` since; then leaves this one's there.
-    fn write_continuing(
-        &self,
-        out: &mut String,
-        id: NodeId,
-        opts: FormatOpts,
-        run: &mut Option<InlineWriter>,
-    ) {
-        let text = std::mem::take(out);
-        let mut inline = match run.take() {
-            Some(mut run) => {
-                run.text = text;
-                run
-            }
-            None => InlineWriter::new(text),
-        };
-        self.write_inline(&mut inline, id, opts);
-        *out = std::mem::take(&mut inline.text);
-        *run = Some(inline);
     }
 
     /// Writes each child in document order, without trimming.

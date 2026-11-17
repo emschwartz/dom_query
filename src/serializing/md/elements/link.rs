@@ -24,11 +24,13 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let mut label_opts = default_opts.link_body();
     label_opts.table_cell = opts.table_cell;
     h.write_inline(&mut label, id, label_opts);
+    label.finish();
 
     // a link with only whitespace to show still separates the words around it
     if label.text.trim_ascii().is_empty() {
         let space = std::mem::take(&mut label.text);
         out.push(Inline::Text(&space, default_opts));
+        // the label is empty now, so this only passes on its separators
         out.push(Inline::Link(&mut label, href, None));
         h.put_buf(label.text);
         return h.put_buf(space);

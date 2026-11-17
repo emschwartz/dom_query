@@ -2684,10 +2684,7 @@ R 2, *C 1* R 2, *C 2*";
             "<p><b>(</b><code></code><svg></svg>x</p>",
             "<strong>(</strong>x",
         );
-        html_2md_compare(
-            "<p><b>(</b><svg></svg><code>x</code></p>",
-            "<strong>(</strong>`x`",
-        );
+        html_2md_compare("<p><b>(</b><svg></svg><code>x</code></p>", "**(**`x`");
         // a boundary that starts emphasis or a link label is judged the same way
         html_2md_compare(
             "<p>See<a href=\"/\"><svg></svg>Home</a></p>",
@@ -3270,6 +3267,14 @@ fn main() {
         // a line separator isn't CommonMark whitespace, so it stays inside
         html_2md_compare("<p>x<em>a&#x2028;</em>b</p>", "x<em>a\u{2028}</em>b");
         html_2md_compare("<p>a<em>&nbsp;</em>b</p>", "a\u{a0}b");
+        // a whitespace-only run after a pending run is its trailing space
+        html_2md_compare("<p>x<b>a</b><b> </b>y</p>", "x**a** y");
+        html_2md_compare("<p><b>a </b><span> </span>y</p>", "**a** y");
+        // a no-break space keeps a break off the edge, so the run can't take delimiters
+        html_2md_compare(
+            "<p>y<b>&nbsp;<br>x</b></p>",
+            "y<strong>\u{a0}  \nx</strong>",
+        );
     }
 
     #[test]
@@ -3428,6 +3433,13 @@ fn main() {
             "<p><strong>x <em>a</em></strong><strong>b</strong></p>",
             "**x *a*b**",
         );
+        // nested delimiters meeting at the junction (`***` + `*y`) keep the runs apart
+        html_2md_compare(
+            "<p><b>a<i>x</i></b><b><i>y</i>b</b></p>",
+            "**a*x***<strong>*y*b</strong>",
+        );
+        // `***a*b**` would fuse the openers into a run that the `*` after `a` closes early
+        html_2md_compare("<p><b><i>a</i>b</b></p>", "<strong>*a*b</strong>");
     }
 
     #[test]

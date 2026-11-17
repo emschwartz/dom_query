@@ -179,12 +179,17 @@ impl MDHost for MDSerializer<'_> {
                                 out.push(Inline::Separator);
                             }
                             if !opts.skip_md {
-                                Self::open_block(&mut out.text, &e.name, opts, double_br);
-                                // push md prefixes only when md mode is active
-                                if !opts.link_body {
-                                    if let Some(prefix) = md_prefix(&e.name) {
-                                        out.text.push_str(prefix);
-                                    }
+                                // only a block writes anything when it opens
+                                if is_link_block(&e.name) {
+                                    out.write_block(|text| {
+                                        Self::open_block(text, &e.name, opts, double_br);
+                                        // push md prefixes only when md mode is active
+                                        if !opts.link_body {
+                                            if let Some(prefix) = md_prefix(&e.name) {
+                                                text.push_str(prefix);
+                                            }
+                                        }
+                                    });
                                 }
                                 // delegate serialization if the element has its own custom handler
                                 if self.write_element(out, e, id, opts) {
@@ -204,8 +209,15 @@ impl MDHost for MDSerializer<'_> {
                     if is_separator(name, opts) {
                         out.push(Inline::Separator);
                     }
-                    if !out.text.ends_with(double_br) {
-                        if let Some(line_break) = close_element(&mut out.text, name, opts, &ops) {
+                    // only a block or a `<br>` writes anything when it closes
+                    if is_link_block(name) || name.local == local_name!("br") {
+                        let mut line_break = None;
+                        out.write_block(|text| {
+                            if !text.ends_with(double_br) {
+                                line_break = close_element(text, name, opts, &ops);
+                            }
+                        });
+                        if let Some(line_break) = line_break {
                             out.push(Inline::LineBreak(line_break));
                         }
                     }
@@ -214,6 +226,7 @@ impl MDHost for MDSerializer<'_> {
         }
 
         if !opts.include_node && !opts.link_body {
+            out.finish();
             trim_space(&mut out.text);
         }
     }

@@ -46,9 +46,8 @@ struct EmphasisRun {
     content: String,
     /// What the text ended with before the opening delimiter.
     start: LastWritten,
-    /// Edge spaces, written after the closing delimiter, then a hard break if `breaks`.
+    /// Edge spaces, written after the closing delimiter.
     trail: String,
-    breaks: bool,
 }
 
 /// What the text ends with, as the flanking of an opening delimiter sees it.
@@ -275,9 +274,9 @@ impl InlineWriter {
         self.boundary_after = false;
     }
 
-    /// The hard breaks owed, a pending run's included.
-    pub(super) fn breaks(&self) -> usize {
-        self.breaks + usize::from(self.pending_run.as_ref().is_some_and(|run| run.breaks))
+    /// The hard breaks owed.
+    pub(super) const fn breaks(&self) -> usize {
+        self.breaks
     }
 
     /// Takes the hard breaks owed, for a block boundary that drops them.
@@ -320,7 +319,7 @@ impl InlineWriter {
     fn take_boundary_space(&mut self, next: char) -> bool {
         // a hard break owed is whitespace
         std::mem::take(&mut self.boundary_after)
-            && self.breaks() == 0
+            && self.breaks == 0
             && boundary_is_space(self.last_visible, next)
     }
 
@@ -364,7 +363,7 @@ impl InlineWriter {
             let spaced = boundary_space || run.trail == " " || !edges.lead.is_empty();
             if !edges.hard_start && run.merges_with(kind, edges.core, spaced) {
                 run.merge(boundary_space, &edges);
-                return;
+                return self.write_if_hard_end(out, &edges);
             }
         }
         // what the pending run is followed by: an edge is whitespace, and a run of the same
@@ -388,6 +387,15 @@ impl InlineWriter {
         }
         let content = std::mem::take(&mut self.spare);
         self.pending_run = Some(EmphasisRun::new(kind, content, self.written, &edges));
+        self.write_if_hard_end(out, &edges);
+    }
+
+    /// A run that ends in a hard break waits on nothing, so it is written at once.
+    fn write_if_hard_end(&mut self, out: &mut Lines, edges: &Edges) {
+        if !edges.hard_end.is_empty() {
+            self.write_pending(out, Some('\n'));
+            self.breaks += 1;
+        }
     }
 
     /// Writes a run of only whitespace, which takes no delimiters: its hard breaks and spaces.
@@ -406,8 +414,7 @@ impl InlineWriter {
             if !last.trim_ascii().is_empty() {
                 self.push_emphasis(out, kind, last, first);
             }
-        } else if let Some(run) = self.pending_run.as_mut().filter(|run| !run.breaks) {
-            // after a run's hard break, it would come before the break
+        } else if let Some(run) = &mut self.pending_run {
             run.trail.push_str(content);
         } else if content.bytes().all(|b| b == b' ') {
             self.ending_space |= !self.at_line_start(out) && !out.as_str().ends_with(['\n', ' ']);
@@ -439,11 +446,7 @@ impl InlineWriter {
         let Some(mut run) = self.pending_run.take() else {
             return;
         };
-        let after = run
-            .trail
-            .chars()
-            .next()
-            .or(if run.breaks { Some('\n') } else { after });
+        let after = run.trail.chars().next().or(after);
         let (kind, start) = (run.kind, run.start);
         if start.delimiters_fit(kind, &run.content, after) {
             let (marker, delim) = (kind.marker(), kind.delimiter());
@@ -470,7 +473,6 @@ impl InlineWriter {
             });
             self.written = LastWritten::Edge;
         }
-        self.breaks += usize::from(run.breaks);
         // spaces at the end are owed like a text's
         let trail = run.trail.trim_end_matches(' ');
         self.ending_space = trail.len() < run.trail.len();
@@ -529,7 +531,6 @@ impl EmphasisRun {
             content,
             start,
             trail: String::new(),
-            breaks: false,
         };
         run.set_trail(edges);
         run
@@ -540,7 +541,6 @@ impl EmphasisRun {
     fn merges_with(&self, kind: Emphasis, core: &str, spaced: bool) -> bool {
         self.kind == kind
             && (self.trail.is_empty() || self.trail == " ")
-            && !self.breaks
             && kind.can_merge(&self.content, core, spaced)
     }
 
@@ -562,7 +562,6 @@ impl EmphasisRun {
 
     fn set_trail(&mut self, edges: &Edges) {
         push_edge_space(&mut self.trail, edges.trail);
-        self.breaks = !edges.hard_end.is_empty();
     }
 }
 

@@ -227,6 +227,9 @@ fn sanitize_attr_value(raw: &str) -> String {
 }
 
 fn max_backtick_run(text: &str) -> usize {
+    if memchr::memchr(b'`', text.as_bytes()).is_none() {
+        return 0;
+    }
     let mut max = 0;
     let mut current = 0;
     for b in text.as_bytes() {

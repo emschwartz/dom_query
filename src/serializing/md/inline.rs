@@ -119,7 +119,6 @@ impl InlineWriter {
     }
 
     fn push_words(&mut self, out: &mut Lines, s: &str, opts: FormatOpts) {
-        // whitespace shows nothing at a line start
         if self.at_line_start(out) && s.trim_ascii().is_empty() {
             return;
         }
@@ -169,7 +168,7 @@ impl InlineWriter {
                 self.push_words(out, s, opts);
                 self.wrote(first, last, LastWritten::Char(last));
             }
-            // whitespace, so no word boundary's space is written before it
+            // a `<br>` is whitespace, so a word boundary before it writes no space of its own
             Inline::HtmlBreak => {
                 self.settle(out, Some('\n'));
                 self.ending_space = false;

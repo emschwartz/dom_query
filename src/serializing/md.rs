@@ -15,8 +15,9 @@
 //! is escaped (`escape_trailing_bang`) or a code span is kept off the one before
 //! (`ends_with_code_span`). Content is buffered only when a decision needs all of it (an
 //! emphasis run or link label for its visible edges, a table cell, a heading), each in a
-//! `BlockWriter::fragment` of its own; a table cell and a heading drop their fragment's
-//! trailing `<br>` before placing it.
+//! `BlockWriter::fragment` of its own (a heading, in a `BlockWriter::document` through
+//! `MDHost::write_buf`); a table cell and a heading drop their trailing `<br>` before placing
+//! it.
 //!
 //! # Where to look
 //!
@@ -28,8 +29,8 @@
 //! | too many or too few blank lines between blocks | `block::block_gap`, `Block::edges`, `BlockWriter::close_prefix` (an item's end seen from outside) |
 //! | a list loose when it should be tight, or the reverse | `block::item_gap`, `BlockWriter::list_gap` |
 //! | a lost `> ` or list indent | `BlockWriter::start_line`, `BlockWriter::item_indent`; `Lines` is the only writer of line breaks |
-//! | a table row split over two lines | `BlockWriter::owe` (what a cell caps a separator to) |
-//! | a missing or extra hard break | `BlockWriter::breaks_before`, `InlineWriter::hard_break` |
+//! | a table row split over two lines | `BlockWriter::owe` (what a cell caps a separator to), `Lines::new_line` (writes the `<br>` in a cell) |
+//! | a missing or extra hard break | `BlockWriter::breaks_before`, `BlockWriter::write_breaks_before`, `BlockWriter::close_prefix`, `InlineWriter::hard_break` |
 //! | a missing or stray backslash | `text_utils` |
 //!
 //! # Adding an element

@@ -500,7 +500,7 @@ impl BlockWriter {
         } else {
             sep
         };
-        // a paragraph ends once
+        // the first line break owed ends the paragraph; a later one owes no second end
         if sep >= Separator::LineBreak && self.owed < Separator::LineBreak {
             self.end_inline(true);
         } else if sep == Separator::Space {
@@ -545,7 +545,7 @@ impl BlockWriter {
             return;
         }
         self.join_paragraphs();
-        // a block that starts a fragment writes no line break before it, but is one
+        // the fragment holds a block now, even if no line break is written before it
         self.wrote_block = true;
         let (start, end) = block.edges();
         let (first, rest) = lines
@@ -687,7 +687,8 @@ impl BlockWriter {
         }
     }
 
-    /// The innermost quote or item has yet to write its first line; the frames due are a suffix.
+    /// The innermost quote or item has yet to write its first line. Frames write theirs from the
+    /// outside in, so if any frame is due, the innermost is.
     fn marker_due(&self) -> bool {
         self.frames.last().is_some_and(|f| f.marker_due)
     }
@@ -715,7 +716,6 @@ impl BlockWriter {
 
     fn write_separator(&mut self, start: BlockStart, head: Option<&str>) -> Separator {
         let owed = std::mem::take(&mut self.owed);
-        // the first frame whose first line this content starts
         let i = self.frames.iter().position(|f| f.marker_due);
         let marker = i.is_some_and(|i| self.frames.get(i).is_some_and(Frame::is_item));
         // the lists around decide the separator, unless it is owed exactly
@@ -774,9 +774,9 @@ impl BlockWriter {
         before: Separator,
         start: BlockStart,
     ) -> Separator {
-        // nothing written yet (`owe` writes a pending run before a line break): the first paragraph
+        // nothing written yet means this is the first paragraph (`owe` wrote any pending run)
         if self.lines.as_str().is_empty() {
-            // its hard breaks are in `before` already
+            // its hard breaks are already counted in `before`
             self.inline.take_breaks(&mut self.lines);
         } else {
             self.keep_paragraph(&mut paragraphs);

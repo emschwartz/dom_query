@@ -109,8 +109,8 @@ fn fuses_ambiguously(touching: bool, content: &str, delim: char) -> bool {
     if !touching && !content.starts_with(delim) {
         return false;
     }
-    // not touching, the first run closes the nested one: its length can't be a multiple of 3
-    // with the fused opener's, so it can't close the outer run (`***a**b*`)
+    // not touching, the first run closes the nested one, not the outer, by the multiple-of-3 rule
+    // for runs that open and close (CommonMark 6.2, rules 9 and 10): `***a**b*`
     let (mut prev, mut escaped, mut first_run) = (None, false, !touching);
     // `prev` is a literal, so a delimiter after it starts a run
     let mut prev_escaped = false;

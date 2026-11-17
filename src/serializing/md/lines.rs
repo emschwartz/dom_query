@@ -5,7 +5,8 @@ pub(super) struct Lines {
     prefix: String,
     /// The length of the prefix an empty line takes: up to the last quote.
     blank_prefix_len: usize,
-    /// The prefix is due before the next character; a line that ends first takes `blank_prefix_len`.
+    /// The prefix is due before the next character; a line that ends first takes only
+    /// `blank_prefix_len` of it.
     prefix_due: bool,
     /// Where the content of the last line starts, if known: a fragment may start mid-line.
     line_start: Option<usize>,
@@ -87,7 +88,7 @@ impl Lines {
     /// Pushes the lines of a block after its first, each on a line of its own.
     pub(super) fn push_following_lines(&mut self, rest: &str) {
         if self.prefix.is_empty() && !self.in_cell {
-            // no prefix and no cell: the lines go in as they are
+            // no prefix to add and no `<br>` to join with: append all the lines at once
             self.text.push('\n');
             self.text.push_str(rest);
             let last = rest.rsplit('\n').next().unwrap_or_default();

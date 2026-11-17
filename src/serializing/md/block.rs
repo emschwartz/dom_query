@@ -926,7 +926,6 @@ impl BlockWriter {
             .iter()
             .position(|f| f.marker_due)
             .unwrap_or(last);
-        let mut rule = self.rule_like(first, head);
         // a cell indents only a marker line
         if !cell || first < last {
             self.lines.prefix_next();
@@ -935,6 +934,8 @@ impl BlockWriter {
             self.wrote_block = true;
             let indent = self.item_indent(i);
             let nested_item = self.frames.get(i + 1).is_some_and(Frame::is_item);
+            // a rule is looked for at each level, so the markers from any one on can make it
+            let rule = self.rule_like(i, head);
             let Some(f) = self.frames.get_mut(i) else {
                 break;
             };
@@ -952,7 +953,6 @@ impl BlockWriter {
                     if rule {
                         debug_assert!(!cell, "a cell's `+` markers make no rule");
                         self.lines.new_line();
-                        rule = self.rule_like(i + 1, head);
                         self.lines.prefix_next();
                     }
                 }

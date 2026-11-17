@@ -1313,6 +1313,11 @@ Another Paragraph";
             "<ul><li><blockquote><ul><li><hr></li></ul></blockquote></li></ul>",
             "- > - ***",
         );
+        // a rule is looked for at each level: `* ***` inside the outer item would be one
+        html_2md_compare(
+            "<ul><li><ul><li>a</li></ul></li><li><ul><li><hr>x</li></ul></li></ul>",
+            "- - a\n- *\n    ***\n    x",
+        );
     }
 
     #[test]

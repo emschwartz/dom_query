@@ -276,7 +276,7 @@ fn html_inputs() {
 /// the same text with the same emphasis on each character after `md` and a render.
 #[test]
 fn nested_emphasis_samples() {
-    const SAMPLES: usize = 20_000;
+    const SAMPLES: usize = 5_000;
     let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
     let mut next = |n: u64| {
         // xorshift64

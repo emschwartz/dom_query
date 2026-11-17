@@ -266,13 +266,14 @@ impl Frame {
 
 /// Writes Markdown blocks: inline content goes to the paragraph in progress, and a block goes
 /// after the separator it owes, which is written only once content follows.
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct BlockWriter {
     lines: Lines,
     paragraph: InlineWriter,
     opts: FormatOpts,
     owed: Separator,
-    /// How the next content starts, as the block opened around it declared.
-    next_start: BlockStart,
+    /// A `<p>` opened and nothing written in it yet.
+    paragraph_opened: bool,
     /// Whether the last line holds content.
     line_open: bool,
     frames: Vec<Frame>,
@@ -296,7 +297,7 @@ impl BlockWriter {
             paragraph: InlineWriter::new(),
             opts,
             owed: Separator::None,
-            next_start: BlockStart::Text,
+            paragraph_opened: false,
             line_open: true,
             frames: Vec::new(),
             owed_exactly: false,
@@ -454,9 +455,7 @@ impl BlockWriter {
     /// Writes a text node; text that continues the line, the common case, skips `push`.
     #[inline]
     pub(super) fn push_text(&mut self, s: &str, opts: FormatOpts) {
-        let starts = self.frames.last().is_some_and(|f| f.marker_due);
-        if self.owed != Separator::None || !self.line_open || starts || self.paragraph.breaks() > 1
-        {
+        if self.starts_content_line() || self.paragraph.breaks() > 1 {
             return self.push(Inline::Text(s, opts));
         }
         self.paragraph.push_text(&mut self.lines, s, opts);
@@ -465,13 +464,7 @@ impl BlockWriter {
     /// Whether `inline` shows content, which needs what is owed written before it.
     fn shows(&self, inline: &Inline) -> bool {
         // whitespace next to a block boundary shows nothing
-        let blank_shows = || {
-            let pending = self.frames.last().is_some_and(|f| f.marker_due);
-            self.line_open
-                && self.owed == Separator::None
-                && !pending
-                && self.paragraph.breaks() == 0
-        };
+        let blank_shows = || !self.starts_content_line() && self.paragraph.breaks() == 0;
         match inline {
             Inline::Separator => false,
             Inline::Text(s, _) => !s.trim_ascii().is_empty() || blank_shows(),
@@ -517,14 +510,12 @@ impl BlockWriter {
     /// Opens a `<p>`, which sits between blank lines.
     pub(super) fn open_paragraph(&mut self) {
         self.owe(Separator::BlankLine);
-        self.next_start = BlockStart::Para;
+        self.paragraph_opened = true;
     }
 
     /// Closes a `<p>`; one that wrote nothing leaves no trace.
     pub(super) fn close_paragraph(&mut self) {
-        if self.next_start == BlockStart::Para {
-            self.next_start = BlockStart::Text;
-        } else {
+        if !std::mem::take(&mut self.paragraph_opened) {
             self.end_paragraph(true);
             self.set_last(BlockEnd::Para);
         }
@@ -666,19 +657,32 @@ impl BlockWriter {
     /// new line's prefix, with the markers of the items it starts. `head` is its first line if
     /// known: inline content starts with text that makes no rule.
     fn start_content(&mut self, start: BlockStart, head: Option<&str>) {
-        let pending = self.frames.last().is_some_and(|f| f.marker_due);
-        if self.owed != Separator::None || !self.line_open || pending {
+        if self.starts_content_line() {
             self.start_block(start, head);
         }
     }
 
+    /// The innermost quote or item has yet to write its first line; the frames due are a suffix.
+    fn marker_due(&self) -> bool {
+        self.frames.last().is_some_and(|f| f.marker_due)
+    }
+
+    /// Content written now needs a separator, a line prefix or a marker before it.
+    fn starts_content_line(&self) -> bool {
+        self.owed != Separator::None || !self.line_open || self.marker_due()
+    }
+
     fn start_block(&mut self, start: BlockStart, head: Option<&str>) {
-        let start = std::mem::replace(&mut self.next_start, BlockStart::Text).max_with(start);
+        let start = if std::mem::take(&mut self.paragraph_opened) {
+            BlockStart::Para
+        } else {
+            start
+        };
         let sep = self.write_separator(start, head);
-        let from = self.frames.iter().position(|f| f.marker_due);
+        let marker_due = self.marker_due();
         // text an item sets off with a blank line is a paragraph, which text after it can't join
-        let para = from.is_none() && start == BlockStart::Text && sep == Separator::BlankLine;
-        if !self.line_open || self.frames.last().is_some_and(|f| f.marker_due) {
+        let para = !marker_due && start == BlockStart::Text && sep == Separator::BlankLine;
+        if !self.line_open || marker_due {
             self.start_line(head);
         }
         self.set_last(if para { BlockEnd::Para } else { BlockEnd::Text });
@@ -919,17 +923,6 @@ impl BlockWriter {
                 ..
             }) => LIST_OFFSET_BASE.saturating_sub(marker.len()),
             _ => 0,
-        }
-    }
-}
-
-impl BlockStart {
-    /// A block opened with a start of its own keeps it.
-    fn max_with(self, other: BlockStart) -> BlockStart {
-        if self == BlockStart::Text {
-            other
-        } else {
-            self
         }
     }
 }

@@ -93,7 +93,7 @@ impl Separator {
     fn write(self, lines: &mut Lines) {
         match self {
             Self::None => {}
-            Self::Space => lines.edit(|text, _| push_block_space(text)),
+            Self::Space => lines.edit_line(|text, _| push_block_space(text)),
             Self::LineBreak => lines.new_line(),
             Self::BlankLine => lines.blank_line(),
         }
@@ -115,19 +115,19 @@ pub(super) enum Block {
 
 impl Block {
     /// How it starts and ends, for the gaps around it.
-    const fn edges(self) -> (Start, End) {
+    const fn edges(self) -> (BlockStart, BlockEnd) {
         match self {
-            Self::Text => (Start::Text, End::Text),
-            Self::Heading | Self::CodeFence | Self::Rule => (Start::Block, End::Closed),
-            Self::Table => (Start::Text, End::Row),
-            Self::Html => (Start::Text, End::Html),
+            Self::Text => (BlockStart::Text, BlockEnd::Text),
+            Self::Heading | Self::CodeFence | Self::Rule => (BlockStart::Block, BlockEnd::Closed),
+            Self::Table => (BlockStart::Text, BlockEnd::Row),
+            Self::Html => (BlockStart::Text, BlockEnd::Html),
         }
     }
 }
 
 /// How a block starts, seen from the line above it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Start {
+pub(super) enum BlockStart {
     Text,
     /// a `<p>`, set off by blank lines that keep its item loose
     Para,
@@ -140,7 +140,7 @@ pub(super) enum Start {
 
 /// How a block ends, seen from the line below it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum End {
+pub(super) enum BlockEnd {
     /// a paragraph at this column: text after it continues it
     Text,
     Para,
@@ -158,16 +158,19 @@ pub(super) enum End {
 
 /// The separator between two blocks of an item, from how the first ends and the next
 /// starts (`CommonMark` §4.8, §5.1). Only the pairs listed can share lines.
-fn gap(prev: End, next: Start) -> Separator {
+fn block_gap(prev: BlockEnd, next: BlockStart) -> Separator {
     match (prev, next) {
         // the blank lines around a paragraph keep its item loose
-        (End::Para, _) | (_, Start::Para) => Separator::BlankLine,
+        (BlockEnd::Para, _) | (_, BlockStart::Para) => Separator::BlankLine,
         // a heading, fence or rule ends at its own line end, a `>` line or block start
         // interrupts a paragraph, and any item start (§5.2) ends a quote, table or nested item
-        (End::Closed, _)
-        | (End::Text, Start::Quote | Start::Block)
-        | (End::Quote, Start::Block | Start::List)
-        | (End::Lazy | End::Row, Start::Quote | Start::Block | Start::List) => Separator::LineBreak,
+        (BlockEnd::Closed, _)
+        | (BlockEnd::Text, BlockStart::Quote | BlockStart::Block)
+        | (BlockEnd::Quote, BlockStart::Block | BlockStart::List)
+        | (
+            BlockEnd::Lazy | BlockEnd::Row,
+            BlockStart::Quote | BlockStart::Block | BlockStart::List,
+        ) => Separator::LineBreak,
         // raw HTML runs on to a blank line, two quotes in a row would merge, and text
         // would continue the paragraph, table or nested item above it
         _ => Separator::BlankLine,
@@ -176,8 +179,8 @@ fn gap(prev: End, next: Start) -> Separator {
 
 /// The separator between items: a marker starts the next one after any line, so a line
 /// break, unless a paragraph at either side keeps the blank line that makes the list loose.
-fn item_gap(prev: End, next: Start) -> Separator {
-    if prev == End::Para || next == Start::Para {
+fn item_gap(prev: BlockEnd, next: BlockStart) -> Separator {
+    if prev == BlockEnd::Para || next == BlockStart::Para {
         Separator::BlankLine
     } else {
         Separator::LineBreak
@@ -189,9 +192,9 @@ fn item_gap(prev: End, next: Start) -> Separator {
 pub(super) enum Preceding {
     /// the item is separated as the list's first block
     Nothing,
-    Item(End),
+    Item(BlockEnd),
     /// content directly in the list
-    Stray(End),
+    Stray(BlockEnd),
 }
 
 /// `CommonMark`'s container blocks (block quote, list item): open while their child blocks are
@@ -210,13 +213,13 @@ pub(super) enum LinePrefix {
 /// A paragraph of a writer that keeps paragraphs apart, and how it was set off.
 pub(super) struct Paragraph {
     pub(super) before: Separator,
-    pub(super) start: Start,
+    pub(super) start: BlockStart,
     text: String,
     pub(super) ends: InlineWriter,
 }
 
 impl Paragraph {
-    const fn new(before: Separator, start: Start) -> Self {
+    const fn new(before: Separator, start: BlockStart) -> Self {
         Self {
             before,
             start,
@@ -236,7 +239,7 @@ impl Paragraph {
     /// The paragraph being written, which the first is until a second starts.
     fn last(paragraphs: &mut Vec<Self>) -> &mut Self {
         if paragraphs.is_empty() {
-            paragraphs.push(Self::new(Separator::None, Start::Text));
+            paragraphs.push(Self::new(Separator::None, BlockStart::Text));
         }
         paragraphs.last_mut().expect("one was pushed")
     }
@@ -249,7 +252,7 @@ struct Frame {
     marker_due: bool,
     outer_prefix: PrefixMark,
     /// list item: how its last block ended
-    item_end: End,
+    item_end: BlockEnd,
     /// list item: its first line holds a nested item, so its nested lists sit at its content
     /// column
     starts_with_list: bool,
@@ -269,7 +272,7 @@ pub(super) struct BlockWriter {
     opts: FormatOpts,
     owed: Separator,
     /// How the next content starts, as the block opened around it declared.
-    next_start: Start,
+    next_start: BlockStart,
     /// Whether the last line holds content.
     line_open: bool,
     frames: Vec<Frame>,
@@ -293,7 +296,7 @@ impl BlockWriter {
             paragraph: InlineWriter::new(),
             opts,
             owed: Separator::None,
-            next_start: Start::Text,
+            next_start: BlockStart::Text,
             line_open: true,
             frames: Vec::new(),
             owed_exactly: false,
@@ -327,7 +330,7 @@ impl BlockWriter {
         let owed = std::mem::take(&mut self.owed);
         let mut paragraphs = self.paragraphs.take()?;
         self.keep_paragraph(&mut paragraphs);
-        paragraphs.push(Paragraph::new(owed, Start::Text));
+        paragraphs.push(Paragraph::new(owed, BlockStart::Text));
         Some(paragraphs)
     }
 
@@ -425,7 +428,7 @@ impl BlockWriter {
             if let (Inline::HtmlBreak, Separator::Space) = (&inline, self.owed) {
                 self.owed = Separator::None;
             }
-            self.start_content(Start::Text, None);
+            self.start_content(BlockStart::Text, None);
         } else if match &inline {
             Inline::Text(..) => true,
             // a run of only whitespace at a block boundary shows nothing, like such text
@@ -506,16 +509,16 @@ impl BlockWriter {
     /// Opens a `<p>`, which sits between blank lines.
     pub(super) fn open_paragraph(&mut self) {
         self.owe(Separator::BlankLine);
-        self.next_start = Start::Para;
+        self.next_start = BlockStart::Para;
     }
 
     /// Closes a `<p>`; one that wrote nothing leaves no trace.
     pub(super) fn close_paragraph(&mut self) {
-        if self.next_start == Start::Para {
-            self.next_start = Start::Text;
+        if self.next_start == BlockStart::Para {
+            self.next_start = BlockStart::Text;
         } else {
             self.end_paragraph(true);
-            self.set_last(End::Para);
+            self.set_last(BlockEnd::Para);
         }
         self.owe(Separator::BlankLine);
     }
@@ -528,7 +531,7 @@ impl BlockWriter {
         let (start, end) = block.edges();
         for (i, line) in lines.split('\n').enumerate() {
             // the lines after the first are not blocks of their own
-            let start = if i == 0 { start } else { Start::Block };
+            let start = if i == 0 { start } else { BlockStart::Block };
             self.owe(Separator::LineBreak);
             if line.is_empty() {
                 let _ = self.write_separator(start, None);
@@ -556,7 +559,7 @@ impl BlockWriter {
 
     /// Content written as it is, such as a task marker.
     pub(super) fn push_raw(&mut self, s: &str) {
-        self.start_content(Start::Text, None);
+        self.start_content(BlockStart::Text, None);
         self.paragraph.push_raw(&mut self.lines, s);
     }
 
@@ -568,23 +571,23 @@ impl BlockWriter {
             prefix,
             marker_due: true,
             outer_prefix: self.lines.prefix_mark(),
-            item_end: End::Closed,
+            item_end: BlockEnd::Closed,
             starts_with_list: false,
         });
     }
 
     /// Closes the innermost quote or item; returns how its content ended, `None` if it had none.
-    pub(super) fn close_prefix(&mut self) -> Option<End> {
+    pub(super) fn close_prefix(&mut self) -> Option<BlockEnd> {
         let frame = self.frames.last()?;
         let end = match (&frame.prefix, frame.marker_due) {
             // an empty item still writes its marker
             (LinePrefix::ListItem { .. }, true) => {
-                self.start_content(Start::List, Some(""));
-                Some(End::Closed)
+                self.start_content(BlockStart::List, Some(""));
+                Some(BlockEnd::Closed)
             }
             (_, true) => None,
             (LinePrefix::ListItem { .. }, false) => Some(frame.item_end),
-            (LinePrefix::Quote, false) => Some(End::Quote),
+            (LinePrefix::Quote, false) => Some(BlockEnd::Quote),
         };
         self.end_paragraph(true);
         let frame = self.frames.pop()?;
@@ -593,8 +596,8 @@ impl BlockWriter {
             let nested = frame.is_item();
             // seen from outside the item, only a line that takes no text stays closed
             let end = match end {
-                End::Closed | End::Row if nested => End::Closed,
-                _ if nested => End::Lazy,
+                BlockEnd::Closed | BlockEnd::Row if nested => BlockEnd::Closed,
+                _ if nested => BlockEnd::Lazy,
                 end => end,
             };
             self.set_last(end);
@@ -607,7 +610,7 @@ impl BlockWriter {
         self.frames.last_mut().filter(|f| f.is_item())
     }
 
-    fn set_last(&mut self, end: End) {
+    fn set_last(&mut self, end: BlockEnd) {
         if let Some(item) = self.item() {
             item.item_end = end;
         }
@@ -624,26 +627,26 @@ impl BlockWriter {
     /// Writes what content starting as `start` needs before it: the separator owed and a
     /// new line's prefix, with the markers of the items it starts. `head` is its first line if
     /// known: inline content starts with text that makes no rule.
-    fn start_content(&mut self, start: Start, head: Option<&str>) {
+    fn start_content(&mut self, start: BlockStart, head: Option<&str>) {
         let pending = self.frames.last().is_some_and(|f| f.marker_due);
         if self.owed != Separator::None || !self.line_open || pending {
             self.start_block(start, head);
         }
     }
 
-    fn start_block(&mut self, start: Start, head: Option<&str>) {
-        let start = std::mem::replace(&mut self.next_start, Start::Text).max_with(start);
+    fn start_block(&mut self, start: BlockStart, head: Option<&str>) {
+        let start = std::mem::replace(&mut self.next_start, BlockStart::Text).max_with(start);
         let sep = self.write_separator(start, head);
         let from = self.frames.iter().position(|f| f.marker_due);
         // text an item sets off with a blank line is a paragraph, which text after it can't join
-        let para = from.is_none() && start == Start::Text && sep == Separator::BlankLine;
+        let para = from.is_none() && start == BlockStart::Text && sep == Separator::BlankLine;
         if !self.line_open || self.frames.last().is_some_and(|f| f.marker_due) {
             self.start_line(head);
         }
-        self.set_last(if para { End::Para } else { End::Text });
+        self.set_last(if para { BlockEnd::Para } else { BlockEnd::Text });
     }
 
-    fn write_separator(&mut self, start: Start, head: Option<&str>) -> Separator {
+    fn write_separator(&mut self, start: BlockStart, head: Option<&str>) -> Separator {
         let owed = std::mem::take(&mut self.owed);
         // the first frame whose first line this content starts
         let i = self.frames.iter().position(|f| f.marker_due);
@@ -658,7 +661,7 @@ impl BlockWriter {
             return self.next_paragraph(sep, start);
         }
         // an empty `>` line ends a quote's paragraph without the blank line
-        if prev == Some(End::Quote) && here == Start::Text && !self.opts.table_cell {
+        if prev == Some(BlockEnd::Quote) && here == BlockStart::Text && !self.opts.table_cell {
             sep = Separator::LineBreak;
             self.lines.new_line();
             self.lines.push('>');
@@ -681,7 +684,7 @@ impl BlockWriter {
     }
 
     /// Keeps the paragraph written apart and starts the next, set off by `before`.
-    fn next_paragraph(&mut self, before: Separator, start: Start) -> Separator {
+    fn next_paragraph(&mut self, before: Separator, start: BlockStart) -> Separator {
         let Some(mut paragraphs) = self.paragraphs.take() else {
             return Separator::None;
         };
@@ -709,14 +712,14 @@ impl BlockWriter {
         &self,
         i: usize,
         owed: Separator,
-        start: Start,
+        start: BlockStart,
         head: Option<&str>,
-    ) -> (Separator, Option<End>, Start) {
+    ) -> (Separator, Option<BlockEnd>, BlockStart) {
         // how the block starting at frame `j` starts: a quote's or item's own start, else the content's
         let block_start = |j: usize| match self.frames.get(j).map(|f| &f.prefix) {
-            Some(LinePrefix::Quote) => Start::Quote,
-            Some(LinePrefix::ListItem { .. }) if self.interrupts(j, head) => Start::Block,
-            Some(LinePrefix::ListItem { .. }) => Start::List,
+            Some(LinePrefix::Quote) => BlockStart::Quote,
+            Some(LinePrefix::ListItem { .. }) if self.interrupts(j, head) => BlockStart::Block,
+            Some(LinePrefix::ListItem { .. }) => BlockStart::List,
             _ => start,
         };
         let (here, first) = (block_start(i), block_start(i + 1));
@@ -735,11 +738,11 @@ impl BlockWriter {
                     ..
                 }),
                 _,
-            ) => (owed.max(gap(*end, here)), Some(*end)),
+            ) => (owed.max(block_gap(*end, here)), Some(*end)),
             (_, Some(outer))
                 if outer.is_item() && (owed >= Separator::LineBreak || i < self.frames.len()) =>
             {
-                (gap(outer.item_end, here), Some(outer.item_end))
+                (block_gap(outer.item_end, here), Some(outer.item_end))
             }
             _ => (owed, None),
         };
@@ -877,9 +880,13 @@ impl BlockWriter {
     }
 }
 
-impl Start {
+impl BlockStart {
     /// A block opened with a start of its own keeps it.
-    fn max_with(self, other: Start) -> Start {
-        if self == Start::Text { other } else { self }
+    fn max_with(self, other: BlockStart) -> BlockStart {
+        if self == BlockStart::Text {
+            other
+        } else {
+            self
+        }
     }
 }

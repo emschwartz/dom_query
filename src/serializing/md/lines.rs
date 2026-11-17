@@ -63,13 +63,13 @@ impl Lines {
         self.text.push(c);
     }
 
-    /// Lets `edit` change the end of the current line, given where its content starts (0 if
+    /// Lets `change` edit the end of the current line, given where its content starts (0 if
     /// unknown); it must not break the line.
     #[inline]
-    pub(super) fn edit(&mut self, edit: impl FnOnce(&mut String, usize)) {
+    pub(super) fn edit_line(&mut self, change: impl FnOnce(&mut String, usize)) {
         self.write_prefix();
         let len = self.text.len();
-        edit(&mut self.text, self.line_start.unwrap_or(0));
+        change(&mut self.text, self.line_start.unwrap_or(0));
         debug_assert!(!self.text.get(len..).unwrap_or_default().contains('\n'));
     }
 

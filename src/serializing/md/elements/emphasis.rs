@@ -2,7 +2,7 @@ use html5ever::{QualName, local_name};
 
 use crate::{Element, NodeId};
 
-use super::super::block::{Block, BlockWriter, Paragraph, Separator, Start};
+use super::super::block::{Block, BlockStart, BlockWriter, Paragraph, Separator};
 use super::super::ctx::{EmphasisScope, FormatOpts};
 use super::super::host::MDHost;
 use super::super::inline::Inline;
@@ -250,7 +250,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 
 /// Writes a paragraph kept apart as a run of its own, set off as it was.
 fn write_paragraph(out: &mut BlockWriter, kind: Emphasis, p: &Paragraph) {
-    let para = p.start == Start::Para;
+    let para = p.start == BlockStart::Para;
     if para {
         out.open_paragraph();
     }

@@ -23,9 +23,9 @@ pub(super) struct InlineWriter {
     /// A separator came after the last visible text.
     separator_after: bool,
     /// A space ends the text so far, written once more of the line follows.
-    space: bool,
-    pending: Option<Run>,
-    written: Written,
+    ending_space: bool,
+    pending_run: Option<EmphasisRun>,
+    written: LastWritten,
     /// An empty buffer for the next pending run.
     spare: String,
     /// Hard breaks owed, written once more of the line follows.
@@ -40,12 +40,12 @@ pub(super) struct Fragment<'a> {
 }
 
 /// A finished emphasis run, written once what follows shows whether its delimiters fit.
-struct Run {
+struct EmphasisRun {
     kind: Emphasis,
     /// The content between the delimiters, without edge spaces or hard breaks.
     content: String,
     /// What the text ended with before the opening delimiter.
-    start: Written,
+    start: LastWritten,
     /// Edge spaces, written after the closing delimiter, then a hard break if `breaks`.
     trail: String,
     breaks: bool,
@@ -53,7 +53,7 @@ struct Run {
 
 /// What the text ends with, as the flanking of an opening delimiter sees it.
 #[derive(Clone, Copy)]
-enum Written {
+enum LastWritten {
     /// A line start or markup, which delimiters can sit next to.
     Edge,
     /// A source character.
@@ -96,9 +96,9 @@ impl InlineWriter {
             last_visible: None,
             separator_before: false,
             separator_after: false,
-            space: false,
-            pending: None,
-            written: Written::Edge,
+            ending_space: false,
+            pending_run: None,
+            written: LastWritten::Edge,
             spare: String::new(),
             breaks: 0,
         }
@@ -108,14 +108,14 @@ impl InlineWriter {
     /// `push`.
     #[inline]
     pub(super) fn push_text(&mut self, out: &mut Lines, s: &str, opts: FormatOpts) {
-        if self.separator_after || self.pending.is_some() || self.breaks > 0 {
+        if self.separator_after || self.pending_run.is_some() || self.breaks > 0 {
             return self.push(out, Inline::Text(s, opts));
         }
         let (Some(first), Some(last)) = (s.chars().next(), s.chars().next_back()) else {
             return;
         };
         self.push_words(out, s, opts);
-        self.wrote(first, last, Written::Char(last));
+        self.wrote(first, last, LastWritten::Char(last));
     }
 
     fn push_words(&mut self, out: &mut Lines, s: &str, opts: FormatOpts) {
@@ -123,15 +123,15 @@ impl InlineWriter {
         if self.at_line_start(out) && s.trim_ascii().is_empty() {
             return;
         }
-        let space = &mut self.space;
-        out.edit(|text, line| push_words(text, line, s, opts, space));
+        let space = &mut self.ending_space;
+        out.edit_line(|text, line| push_words(text, line, s, opts, space));
     }
 
     /// Writes the space owed, before more of the line.
     fn write_space(&mut self, out: &mut Lines) {
-        if std::mem::take(&mut self.space) {
+        if std::mem::take(&mut self.ending_space) {
             out.push(' ');
-            self.written = Written::Char(' ');
+            self.written = LastWritten::Char(' ');
         }
     }
 
@@ -140,7 +140,7 @@ impl InlineWriter {
         if keep {
             self.write_space(out);
         }
-        self.space = false;
+        self.ending_space = false;
     }
 
     /// Writes `inline`, holding back what depends on what follows: a separator, a space, hard
@@ -153,7 +153,7 @@ impl InlineWriter {
             // whitespace is a space owed; after a pending run it stays at the run's edge, where a
             // run of its kind may join it
             Inline::Text(s, opts) if !s.is_empty() && s.trim_ascii().is_empty() => {
-                if let Some(run) = &mut self.pending {
+                if let Some(run) = &mut self.pending_run {
                     if !run.trail.ends_with([' ', '\n']) {
                         run.trail.push(' ');
                     }
@@ -170,15 +170,15 @@ impl InlineWriter {
                 };
                 self.start_piece(out, first, Some(first));
                 self.push_words(out, s, opts);
-                self.wrote(first, last, Written::Char(last));
+                self.wrote(first, last, LastWritten::Char(last));
             }
             // whitespace, so no separator is written before it
             Inline::HtmlBreak => {
                 self.settle(out, Some('\n'));
-                self.space = false;
+                self.ending_space = false;
                 self.start_piece(out, '\n', Some('\n'));
                 out.push_str("<br>");
-                self.wrote('\n', '\n', Written::Edge);
+                self.wrote('\n', '\n', LastWritten::Edge);
             }
             // opaque words; a code span right after another would merge their backticks
             Inline::Code(span) => {
@@ -186,12 +186,12 @@ impl InlineWriter {
                     out.push(' ');
                 }
                 out.push_str(span);
-                self.wrote(WORD, WORD, Written::Edge);
+                self.wrote(WORD, WORD, LastWritten::Edge);
             }
             Inline::Image(md) => {
                 self.start_piece(out, WORD, Some('!'));
                 out.push_str(md);
-                self.wrote(WORD, WORD, Written::Edge);
+                self.wrote(WORD, WORD, LastWritten::Edge);
             }
             // a run that writes nothing passes its separators on
             Inline::Emphasis { content: run, .. } | Inline::Link { label: run, .. }
@@ -214,7 +214,7 @@ impl InlineWriter {
                     self.push(out, Inline::Separator);
                 }
                 self.start_piece(out, label.ends.first_visible.unwrap_or(WORD), Some('['));
-                out.edit(|text, _| {
+                out.edit_line(|text, _| {
                     // an unescaped `!` before `[` would make image syntax
                     escape_trailing_bang(text);
                     text.push('[');
@@ -227,7 +227,7 @@ impl InlineWriter {
                     text.push(')');
                 });
                 self.shown_run(label.ends);
-                self.written = Written::Edge;
+                self.written = LastWritten::Edge;
             }
         }
     }
@@ -236,7 +236,7 @@ impl InlineWriter {
     /// it, and its last character is the visible end.
     pub(super) fn push_raw(&mut self, out: &mut Lines, s: &str) {
         self.finish(out);
-        self.space = false;
+        self.ending_space = false;
         debug_assert!(
             !s.is_empty(),
             "raw content is a marker or a line of a block"
@@ -245,7 +245,7 @@ impl InlineWriter {
         self.separator_after = false;
         self.first_visible.get_or_insert('\n');
         self.last_visible = out.as_str().chars().next_back();
-        self.written = Written::Edge;
+        self.written = LastWritten::Edge;
     }
 
     /// Writes a pending run: what follows is the end of the line or of the enclosing markup.
@@ -258,7 +258,7 @@ impl InlineWriter {
         self.separator_after = false;
         self.first_visible.get_or_insert('\n');
         self.last_visible = Some('\n');
-        self.written = Written::Edge;
+        self.written = LastWritten::Edge;
     }
 
     /// A hard break; one that only ends a line some other way (`!force`) adds none to one owed.
@@ -272,7 +272,7 @@ impl InlineWriter {
 
     /// The hard breaks owed, a pending run's included.
     pub(super) fn breaks(&self) -> usize {
-        self.breaks + usize::from(self.pending.as_ref().is_some_and(|run| run.breaks))
+        self.breaks + usize::from(self.pending_run.as_ref().is_some_and(|run| run.breaks))
     }
 
     /// Takes the hard breaks owed, for a block boundary that drops them.
@@ -292,7 +292,7 @@ impl InlineWriter {
     #[cold]
     fn write_breaks_now(&mut self, out: &mut Lines) {
         for _ in 0..std::mem::take(&mut self.breaks) {
-            self.space = false;
+            self.ending_space = false;
             out.hard_break();
             self.end_paragraph();
         }
@@ -301,7 +301,7 @@ impl InlineWriter {
     /// Whether nothing is written yet on a line of the document: edge spaces and a hard break
     /// show nothing there.
     fn at_line_start(&self, out: &Lines) -> bool {
-        out.at_line_start() && self.pending.is_none()
+        out.at_line_start() && self.pending_run.is_none()
     }
 
     /// Starts a piece that shows `next` first and writes `source` first: writes the pending
@@ -323,7 +323,7 @@ impl InlineWriter {
     fn write_owed_space(&mut self, out: &mut Lines, owed: bool, source: Option<char>) -> bool {
         self.settle(out, if owed { Some(' ') } else { source });
         self.write_breaks(out);
-        let spaced = self.space;
+        let spaced = self.ending_space;
         self.write_space(out);
         (owed && self.write_separator_space(out)) || spaced
     }
@@ -331,12 +331,12 @@ impl InlineWriter {
     #[cold]
     fn write_separator_space(&mut self, out: &mut Lines) -> bool {
         let mut wrote = false;
-        out.edit(|text, _| {
+        out.edit_line(|text, _| {
             let len = text.len();
             push_block_space(text);
             wrote = text.len() != len;
         });
-        self.written = Written::Char(' ');
+        self.written = LastWritten::Char(' ');
         wrote
     }
 
@@ -359,10 +359,11 @@ impl InlineWriter {
                         self.push_emphasis(out, kind, after, first);
                     }
                 }
-            } else if let Some(run) = &mut self.pending {
+            } else if let Some(run) = &mut self.pending_run {
                 run.trail.push_str(content);
             } else if content.bytes().all(|b| b == b' ') {
-                self.space |= !self.at_line_start(out) && !out.as_str().ends_with(['\n', ' ']);
+                self.ending_space |=
+                    !self.at_line_start(out) && !out.as_str().ends_with(['\n', ' ']);
             } else {
                 // spaces show nothing at a line start; a no-break space is content
                 let content = if self.at_line_start(out) {
@@ -373,7 +374,7 @@ impl InlineWriter {
                 self.start_piece(out, first, content.chars().next());
                 out.push_str(content);
                 if let Some(c) = content.chars().next_back() {
-                    self.written = Written::Char(c);
+                    self.written = LastWritten::Char(c);
                 }
             }
             return;
@@ -384,7 +385,7 @@ impl InlineWriter {
             self.breaks += 1;
         }
         let owed_space = self.owes_space(first);
-        if let Some(run) = &mut self.pending {
+        if let Some(run) = &mut self.pending_run {
             let spaced = owed_space || run.trail == " " || !edges.lead.is_empty();
             if !edges.hard_start && run.joins(kind, edges.core, spaced) {
                 run.append(owed_space, &edges);
@@ -392,8 +393,11 @@ impl InlineWriter {
             }
         }
         // what the pending run is followed by: an edge is whitespace, and a run of the same
-        // kind fuses with it anyway (`Written::fuses`)
-        let same_kind = self.pending.as_ref().is_some_and(|run| run.kind == kind);
+        // kind fuses with it anyway (`LastWritten::fuses`)
+        let same_kind = self
+            .pending_run
+            .as_ref()
+            .is_some_and(|run| run.kind == kind);
         let next = if same_kind || edges.hard_start || !edges.lead.is_empty() {
             None
         } else {
@@ -402,26 +406,26 @@ impl InlineWriter {
         self.write_owed_space(out, owed_space, next);
         // spaces show nothing at a line start; a no-break space is content
         if !self.at_line_start(out) || !edges.lead.trim_ascii().is_empty() {
-            out.edit(|text, _| push_edge_space(text, edges.lead));
+            out.edit_line(|text, _| push_edge_space(text, edges.lead));
             if let Some(c) = edges.lead.chars().next_back() {
-                self.written = Written::Char(c);
+                self.written = LastWritten::Char(c);
             }
         }
         let content = std::mem::take(&mut self.spare);
-        self.pending = Some(Run::new(kind, content, self.written, &edges));
+        self.pending_run = Some(EmphasisRun::new(kind, content, self.written, &edges));
     }
 
     /// Writes the pending run, with delimiters if they fit before `after`, else as html.
     #[inline]
     fn settle(&mut self, out: &mut Lines, after: Option<char>) {
-        if self.pending.is_some() {
+        if self.pending_run.is_some() {
             self.write_pending(out, after);
         }
     }
 
     #[inline(never)]
     fn write_pending(&mut self, out: &mut Lines, after: Option<char>) {
-        let Some(mut run) = self.pending.take() else {
+        let Some(mut run) = self.pending_run.take() else {
             return;
         };
         let after = run
@@ -437,40 +441,40 @@ impl InlineWriter {
             out.push_str(marker);
             out.push_lines(&run.content);
             out.push_str(marker);
-            self.written = Written::Closing {
+            self.written = LastWritten::Closing {
                 kind,
                 before: run.content.trim_end_matches(delim).chars().next_back(),
                 nested: run.content.ends_with(delim),
             };
         } else {
             let tag = kind.tag();
-            out.edit(|text, _| {
+            out.edit_line(|text, _| {
                 text.push('<');
                 text.push_str(tag);
                 text.push('>');
             });
             out.push_lines(&run.content);
-            out.edit(|text, _| {
+            out.edit_line(|text, _| {
                 text.push_str("</");
                 text.push_str(tag);
                 text.push('>');
             });
-            self.written = Written::Edge;
+            self.written = LastWritten::Edge;
         }
         self.breaks += usize::from(run.breaks);
         // spaces at the end are owed like a text's
         let trail = run.trail.trim_end_matches(' ');
-        self.space = trail.len() < run.trail.len();
+        self.ending_space = trail.len() < run.trail.len();
         if let Some(c) = trail.chars().next_back() {
             out.push_str(trail);
-            self.written = Written::Char(c);
+            self.written = LastWritten::Char(c);
         }
         run.content.clear();
         self.spare = run.content;
     }
 
     /// Records a written piece: its visible ends and what the text now ends with.
-    fn wrote(&mut self, first: char, last: char, written: Written) {
+    fn wrote(&mut self, first: char, last: char, written: LastWritten) {
         self.first_visible.get_or_insert(first);
         self.last_visible = Some(last);
         self.written = written;
@@ -483,7 +487,7 @@ impl InlineWriter {
     }
 }
 
-impl Written {
+impl LastWritten {
     /// The source character an opening delimiter of `kind` would follow; a closing delimiter
     /// of the same character joins it into one delimiter run, so it looks past that.
     fn before(self, kind: Emphasis) -> Option<char> {
@@ -511,9 +515,9 @@ impl Written {
     }
 }
 
-impl Run {
+impl EmphasisRun {
     /// A run of `kind` holding `edges`, in `content`, an empty buffer.
-    fn new(kind: Emphasis, mut content: String, start: Written, edges: &Edges) -> Self {
+    fn new(kind: Emphasis, mut content: String, start: LastWritten, edges: &Edges) -> Self {
         content.push_str(edges.core);
         let mut run = Self {
             kind,

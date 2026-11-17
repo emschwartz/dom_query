@@ -3,7 +3,7 @@ use html5ever::{LocalName, local_name};
 use crate::{Element, NodeId, NodeRef};
 
 use super::super::block::{
-    BlockWriter, End, LinePrefix, Preceding, Separator, is_list, is_md_block,
+    BlockEnd, BlockWriter, LinePrefix, Preceding, Separator, is_list, is_md_block,
 };
 use super::super::constants::MAX_LIST_NUMBER;
 use super::super::ctx::FormatOpts;
@@ -42,24 +42,24 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             // continues that item lazily unless a paragraph or block ends it
             let lazy = match preceding {
                 Preceding::Item(end) => {
-                    out.owe_exactly(if end == End::Para {
+                    out.owe_exactly(if end == BlockEnd::Para {
                         Separator::BlankLine
                     } else {
                         Separator::LineBreak
                     });
-                    matches!(end, End::Text | End::Quote | End::Lazy)
+                    matches!(end, BlockEnd::Text | BlockEnd::Quote | BlockEnd::Lazy)
                 }
-                Preceding::Stray(end) => end == End::Lazy,
+                Preceding::Stray(end) => end == BlockEnd::Lazy,
                 Preceding::Nothing => false,
             };
             if out.starts_content(|out| h.write(out, child.id, stray_opts)) {
                 // text that starts the list would be underlined by an empty item after it
                 preceding = Preceding::Stray(if lazy {
-                    End::Lazy
+                    BlockEnd::Lazy
                 } else if matches!(preceding, Preceding::Nothing) {
-                    End::Para
+                    BlockEnd::Para
                 } else {
-                    End::Text
+                    BlockEnd::Text
                 });
             }
             continue;
@@ -78,7 +78,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         number = number.saturating_add(1).min(MAX_LIST_NUMBER);
         out.open_prefix(LinePrefix::ListItem { marker, preceding });
         h.write(out, child.id, item_opts);
-        preceding = Preceding::Item(out.close_prefix().unwrap_or(End::Closed));
+        preceding = Preceding::Item(out.close_prefix().unwrap_or(BlockEnd::Closed));
     }
     if has_items {
         h.set_last_list(id, alt);

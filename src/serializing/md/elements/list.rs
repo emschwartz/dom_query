@@ -231,8 +231,9 @@ fn parse_list_number(value: &str) -> Option<u32> {
         None => (false, value.strip_prefix('+').unwrap_or(value)),
     };
     // Extract the contiguous sequence of ASCII digits
-    let digits_len = value.bytes().take_while(u8::is_ascii_digit).count();
-    if digits_len == 0 {
+    let digits = value.trim_start_matches(|c: char| c.is_ascii_digit());
+    let digits = value.strip_suffix(digits).unwrap_or_default();
+    if digits.is_empty() {
         return None;
     }
     // md doesn't support negative list markers, clamp to zero
@@ -241,7 +242,7 @@ fn parse_list_number(value: &str) -> Option<u32> {
     }
 
     // strip leading zeros from the digit slice
-    let meaningful = value[..digits_len].trim_start_matches('0');
+    let meaningful = digits.trim_start_matches('0');
     match meaningful.len() {
         // the input was "0" or multiple zeros ("000")
         0 => Some(0),

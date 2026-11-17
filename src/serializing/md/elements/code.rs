@@ -33,12 +33,13 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 fn find_code_language<H: MDHost>(h: &H, id: NodeId) -> Option<String> {
     let nodes = h.nodes();
     // Check the current node
-    if let Some(language) = find_code_lang_attribute(&nodes[id.value()]) {
+    if let Some(language) = nodes.get(id.value()).and_then(find_code_lang_attribute) {
         return Some(language);
     }
 
     ancestor_nodes(Ref::clone(&nodes), &id, Some(3))
-        .find_map(|ancestor_id| find_code_lang_attribute(&nodes[ancestor_id.value()]))
+        .filter_map(|ancestor_id| nodes.get(ancestor_id.value()))
+        .find_map(find_code_lang_attribute)
         .or_else(|| find_code_language_css_class(h, id))
 }
 
@@ -46,8 +47,9 @@ fn find_code_language<H: MDHost>(h: &H, id: NodeId) -> Option<String> {
 fn find_code_language_css_class<H: MDHost>(h: &H, id: NodeId) -> Option<String> {
     let nodes = h.nodes();
     let code_elem = child_nodes(Ref::clone(&nodes), &id, false).find_map(|child_id| {
-        let node = &nodes[child_id.value()];
-        node.as_element()
+        nodes
+            .get(child_id.value())?
+            .as_element()
             .filter(|el| el.name.local == local_name!("code"))
     });
 
@@ -117,7 +119,10 @@ fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOp
 fn pre_text<'a>(nodes: &'a Ref<Vec<TreeNode>>, id: NodeId) -> Cow<'a, str> {
     let mut content = Cow::Borrowed("");
     for child_id in descendant_nodes(Ref::clone(nodes), &id) {
-        match &nodes[child_id.value()].data {
+        let Some(node) = nodes.get(child_id.value()) else {
+            continue;
+        };
+        match &node.data {
             // a lone text node, the usual case, is borrowed
             NodeData::Text { contents } if content.is_empty() => {
                 content = Cow::Borrowed(contents.as_ref());
@@ -137,7 +142,7 @@ fn edge_line_breaks<H: MDHost>(h: &H, id: NodeId) -> (bool, bool) {
     let nodes = h.nodes();
     let (mut starts, mut ends) = (None, false);
     for child_id in descendant_nodes(Ref::clone(&nodes), &id) {
-        let NodeData::Text { contents } = &nodes[child_id.value()].data else {
+        let Some(NodeData::Text { contents }) = nodes.get(child_id.value()).map(|n| &n.data) else {
             continue;
         };
         let rest = contents.trim_start_matches([' ', '\t']);
@@ -156,7 +161,7 @@ fn write_code<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatO
     let is_multiline = {
         let nodes = h.nodes();
         descendant_nodes(Ref::clone(&nodes), &id)
-            .map(|id| &nodes[id.value()])
+            .filter_map(|id| nodes.get(id.value()))
             .filter_map(|t| match t.data {
                 NodeData::Text { ref contents } => Some(contents),
                 _ => None,

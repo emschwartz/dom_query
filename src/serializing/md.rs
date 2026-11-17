@@ -32,6 +32,9 @@
 //! Map it to an `Inline`, a `Block` or a `LinePrefix` in its writer. A new kind of output gets a
 //! new variant, handled in `InlineWriter::push` or `BlockWriter::push_block`; an element writer
 //! never writes to a `String` itself.
+//!
+//! `md()` must not panic on any input, so slicing and indexing are denied in this module.
+#![deny(clippy::string_slice, clippy::indexing_slicing)]
 
 mod block;
 mod constants;
@@ -58,6 +61,7 @@ pub fn serialize_md(
 }
 
 #[cfg(test)]
+#[allow(clippy::string_slice, clippy::indexing_slicing)]
 mod tests {
 
     use crate::Document;

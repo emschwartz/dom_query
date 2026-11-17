@@ -169,7 +169,9 @@ impl MDHost for MDSerializer<'_> {
         while let Some(op) = ops.pop() {
             match op {
                 Op::Open(id) => {
-                    let node = &self.nodes[id.value()];
+                    let Some(node) = self.nodes.get(id.value()) else {
+                        continue;
+                    };
                     match &node.data {
                         NodeData::Text { contents } => out.push_text(contents, opts),
                         NodeData::Element(e) => {
@@ -243,6 +245,7 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
     }
 }
 #[cfg(test)]
+#[allow(clippy::string_slice, clippy::indexing_slicing)]
 mod tests {
 
     use super::*;

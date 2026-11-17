@@ -95,18 +95,20 @@ fn is_ordered_list_marker(chunk: &str) -> bool {
 /// Appends `content` to `out`, putting a backslash before every `|`.
 /// With `skip_escaped`, a `|` that already follows a backslash is left alone.
 pub(super) fn push_escaped_pipes(out: &mut String, content: &str, skip_escaped: bool) -> bool {
-    let bytes = content.as_bytes();
-    let mut last = 0;
+    let mut pieces = content.split('|');
+    let mut prev = pieces.next().unwrap_or_default();
+    out.push_str(prev);
     let mut changed = false;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'|' && !(skip_escaped && i > 0 && bytes[i - 1] == b'\\') {
-            out.push_str(&content[last..i]);
+    for piece in pieces {
+        if skip_escaped && prev.ends_with('\\') {
+            out.push('|');
+        } else {
             out.push_str("\\|");
-            last = i + 1;
             changed = true;
         }
+        out.push_str(piece);
+        prev = piece;
     }
-    out.push_str(&content[last..]);
     changed
 }
 
@@ -125,8 +127,8 @@ pub(super) fn push_escaped_chunk(text: &mut String, chunk: &str, escape: bool, l
     text.reserve(chunk.len());
 
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'&' && starts_char_reference(&bytes[i + 1..]) {
-            text.push_str(&chunk[last..i]);
+        if b == b'&' && starts_char_reference(bytes.get(i + 1..).unwrap_or_default()) {
+            text.push_str(chunk.get(last..i).unwrap_or_default());
             text.push_str("&amp;");
             last = i + 1;
             continue;
@@ -146,13 +148,13 @@ pub(super) fn push_escaped_chunk(text: &mut String, chunk: &str, escape: bool, l
         };
 
         if escaped {
-            text.push_str(&chunk[last..i]);
+            text.push_str(chunk.get(last..i).unwrap_or_default());
             text.push('\\');
             last = i;
         }
     }
 
-    text.push_str(&chunk[last..]);
+    text.push_str(chunk.get(last..).unwrap_or_default());
 }
 
 /// True when an ampersand is followed by a character reference a Markdown
@@ -162,12 +164,11 @@ fn starts_char_reference(rest: &[u8]) -> bool {
     if !matches!(rest.first(), Some(b'#' | b'a'..=b'z' | b'A'..=b'Z')) {
         return false;
     }
-    let window = &rest[..rest.len().min(32)];
     // the longest HTML entity name is 31 characters, plus the semicolon
-    let Some(semi) = window.iter().position(|&b| b == b';') else {
+    let Some(semi) = rest.iter().take(32).position(|&b| b == b';') else {
         return false;
     };
-    let name = &rest[..semi];
+    let name = rest.get(..semi).unwrap_or_default();
     if let [b'#', b'x' | b'X', digits @ ..] = name {
         return !digits.is_empty() && digits.iter().all(u8::is_ascii_hexdigit);
     }
@@ -193,7 +194,8 @@ pub(super) fn trim_trailing_space(s: &mut String) {
 
 /// Formats a Markdown link destination and writes it directly to the buffer.
 pub(super) fn push_md_url(text: &mut String, dest: &str) {
-    let mut balance: i32 = 0;
+    // unclosed `(` so far
+    let mut open: usize = 0;
     let mut has_backslash = false;
 
     let dest = &html_escape(dest);
@@ -202,13 +204,13 @@ pub(super) fn push_md_url(text: &mut String, dest: &str) {
 
     for &b in dest.as_bytes() {
         match b {
-            b'(' => balance += 1,
+            b'(' => open += 1,
             b')' => {
-                balance -= 1;
-                if balance < 0 {
+                let Some(rest) = open.checked_sub(1) else {
                     needs_wrap = true;
                     break;
-                }
+                };
+                open = rest;
             }
             b' ' | b'<' | 0..=31 | 127 => {
                 needs_wrap = true;
@@ -219,7 +221,7 @@ pub(super) fn push_md_url(text: &mut String, dest: &str) {
         }
     }
 
-    if needs_wrap || balance != 0 {
+    if needs_wrap || open != 0 {
         text.reserve(dest.len() + 4);
         text.push('<');
         for c in dest.chars() {
@@ -266,32 +268,19 @@ pub fn html_escape(text: &str) -> Cow<'_, str> {
         return Cow::Borrowed(text);
     }
     let mut result = String::with_capacity(text.len());
-    let mut search_start = 0;
-
-    while search_start < bytes.len() {
-        let next_special = if let Some(i) = memchr3(b'"', b'&', 0xC2, &bytes[search_start..]) {
-            search_start + i
-        } else {
-            result.push_str(&text[search_start..]);
-            break;
-        };
-
-        result.push_str(&text[search_start..next_special]);
-
-        let (replacement, advance) = match bytes[next_special] {
-            b'&' => ("&amp;", 1),
-            b'"' => ("&quot;", 1),
-            0xC2 if bytes.get(next_special + 1) == Some(&0xA0) => ("&nbsp;", 2),
-            _ => {
-                result.push_str(&text[next_special..next_special + 2]);
-                search_start = next_special + 2;
-                continue;
-            }
-        };
-
-        result.push_str(replacement);
-        search_start = next_special + advance;
+    let mut rest = text;
+    while let Some(i) = rest.find(['"', '&', '\u{a0}']) {
+        let (before, after) = rest.split_at_checked(i).unwrap_or((rest, ""));
+        result.push_str(before);
+        let mut chars = after.chars();
+        result.push_str(match chars.next() {
+            Some('&') => "&amp;",
+            Some('"') => "&quot;",
+            _ => "&nbsp;",
+        });
+        rest = chars.as_str();
     }
+    result.push_str(rest);
     Cow::Owned(result)
 }
 
@@ -310,6 +299,7 @@ const fn is_byte_escaped_at_line_start(b: u8) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::string_slice, clippy::indexing_slicing)]
 mod tests {
 
     use super::*;

@@ -191,8 +191,8 @@ fn delimiter_cell(width: usize, align: Option<&str>) -> String {
 /// Drops a trailing `!important`, with or without whitespace, in any case.
 fn strip_important(value: &str) -> &str {
     let value = value.trim();
-    match value.rfind('!') {
-        Some(i) if value[i + 1..].trim().eq_ignore_ascii_case("important") => value[..i].trim_end(),
+    match value.rsplit_once('!') {
+        Some((rest, flag)) if flag.trim().eq_ignore_ascii_case("important") => rest.trim_end(),
         _ => value,
     }
 }

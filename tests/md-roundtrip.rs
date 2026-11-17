@@ -285,19 +285,21 @@ fn nested_emphasis_samples() {
         seed ^= seed << 17;
         seed % n
     };
-    let mut failures = Vec::new();
+    let (mut failed, mut first) = (0, String::new());
     for _ in 0..SAMPLES {
         let html = format!("<p>{}</p>", emphasis_nodes(&mut next, 3));
         let md = Document::from(html.as_str()).md(None);
-        if emphasis_by_char(&html) != emphasis_by_char(&render(&md)) {
-            eprintln!("=== {html}\n--- md\n{md}");
-            failures.push(html);
+        let rendered = render(&md);
+        if emphasis_by_char(&html) != emphasis_by_char(&rendered) {
+            failed += 1;
+            if failed <= 3 {
+                first += &format!("html: {html}\nmd: {md:?}\nrendered: {rendered}\n\n");
+            }
         }
     }
     assert!(
-        failures.is_empty(),
-        "{} of {SAMPLES} failed",
-        failures.len()
+        failed == 0,
+        "{failed} of {SAMPLES} failed, the first:\n{first}"
     );
 }
 

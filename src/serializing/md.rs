@@ -1448,6 +1448,25 @@ Another Paragraph";
         html_2md_compare("<ul><li><br><br>a</li></ul>", "- a");
         // trailing hard breaks leave no blank line, so the list stays tight
         html_2md_compare("<ul><li>a<br><br></li><li>b</li></ul>", "- a\n- b");
+        // hard breaks at an item's start, or before its block or the next marker, end no paragraph
+        html_2md_compare("<ul><li>a</li><li><br><br>b</li></ul>", "- a\n- b");
+        html_2md_compare("<ol><li>a</li><li><br><br></li></ol>", "1. a\n2.");
+        html_2md_compare(
+            "<ul><li>a<br><br><ul><li>n</li></ul></li></ul>",
+            "- a\n    - n",
+        );
+        html_2md_compare(
+            "<ul><li><br>a</li><li>b<br></li><li><br></li></ul>",
+            "- a\n- b\n-",
+        );
+        html_2md_compare(
+            "<blockquote><ul><li><svg></svg>b<br></li><li><br></li></ul></blockquote>",
+            "> - b\n> -",
+        );
+        html_2md_compare(
+            "<ul><li>a<br><br><pre>x</pre></li></ul>",
+            "- a\n  ```\n  x\n  ```",
+        );
         // a nested list in a table cell keeps its indent
         html_2md_compare(
             "<table><tr><th>h</th></tr><tr><td><ul><li>a<ul><li>b</li></ul></li></ul></td></tr></table>",

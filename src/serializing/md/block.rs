@@ -402,7 +402,8 @@ impl BlockWriter {
     pub(super) fn finish_fragment(&mut self) -> bool {
         // a hard break at the end belongs to the line the run is on; two end a paragraph
         self.inline.settle_at_end(&mut self.lines);
-        self.wrote_block |= self.breaks_before(Separator::None, false) == Separator::BlankLine;
+        self.wrote_block |=
+            self.breaks_before(Separator::None, BlockStart::Text, false) == Separator::BlankLine;
         self.inline.write_breaks(&mut self.lines);
         self.inline.write_ending_space(&mut self.lines);
         self.wrote_block
@@ -441,7 +442,7 @@ impl BlockWriter {
                 Inline::Emphasis { content, .. } => starts_with_hard_break(content.text),
                 _ => false,
             };
-            let sep = self.breaks_before(self.owed, run_break);
+            let sep = self.breaks_before(self.owed, BlockStart::Text, run_break);
             if sep > self.owed {
                 self.owe(sep);
                 self.wrote_block = true;
@@ -593,9 +594,12 @@ impl BlockWriter {
         }
     }
 
-    /// A block before already ends the line.
+    /// A block before already ends the line, or the innermost quote or item has no content yet
+    /// (in a cell, a break there is content).
     fn line_ended(&self) -> bool {
-        !self.line_open || self.owed >= Separator::LineBreak
+        !self.line_open
+            || self.owed >= Separator::LineBreak
+            || (self.marker_due() && !self.opts.table_cell)
     }
 
     /// Content written as it is, such as a task marker.
@@ -745,7 +749,7 @@ impl BlockWriter {
             self.lines.push('>');
         }
         // hard breaks owed raise or replace it, and a line break drops them
-        sep = self.breaks_before(sep, false);
+        sep = self.breaks_before(sep, start, false);
         if sep >= Separator::LineBreak {
             self.write_breaks_before(sep, marker);
         }
@@ -845,19 +849,32 @@ impl BlockWriter {
         }
     }
 
-    /// What the hard breaks owed (`run_break`: one more at a run's start) make of `sep`: two end
-    /// the paragraph, one replaces a space; before a cell's first text they are kept as content.
-    fn breaks_before(&self, sep: Separator, run_break: bool) -> Separator {
+    /// What the hard breaks owed (`run_break`: one more at a run's start) make of `sep` before
+    /// content starting as `start`: two end the paragraph, unless they end an item's content; one
+    /// replaces a space; before a cell's first text they are kept as content.
+    fn breaks_before(&self, sep: Separator, start: BlockStart, run_break: bool) -> Separator {
         let breaks = self.inline.breaks() + usize::from(run_break);
         if breaks == 0 || (self.opts.table_cell && self.lines.as_str().is_empty()) {
             sep
-        } else if breaks > 1 {
+        } else if breaks > 1 && !self.breaks_end_item(start) {
             sep.max(Separator::BlankLine)
         } else if sep < Separator::LineBreak {
             Separator::None
         } else {
             sep
         }
+    }
+
+    /// Whether the hard breaks owed end an item's content, where a block or marker follows them
+    /// (outside a cell, which keeps them).
+    fn breaks_end_item(&self, start: BlockStart) -> bool {
+        !self.opts.table_cell
+            && (start != BlockStart::Text || self.marker_due())
+            && self
+                .frames
+                .iter()
+                .rfind(|f| !f.marker_due)
+                .is_some_and(Frame::is_item)
     }
 
     /// A block drops the hard breaks owed, except that a single one before a line break still

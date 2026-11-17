@@ -12,7 +12,8 @@
 //! are owed, and settled when the next visible content arrives. Nothing reads back, trims or
 //! re-indents text already written. Content is buffered only when a decision needs all of it
 //! (an emphasis run or link label for its visible edges, a table cell, a heading), each in a
-//! `BlockWriter::fragment` of its own.
+//! `BlockWriter::fragment` of its own. A table cell is the one exception to the rule: its
+//! finished text is trimmed in place before it is placed (`table.rs`).
 //!
 //! # Where to look
 //!
@@ -31,7 +32,7 @@
 //!
 //! Map it to an `Inline`, a `Block` or a `LinePrefix` in its writer. A new kind of output gets a
 //! new variant, handled in `InlineWriter::push` or `BlockWriter::push_block`; an element writer
-//! never writes to a `String` itself.
+//! never writes to `Lines` itself.
 //!
 //! `md()` must not panic on any input, so slicing and indexing are denied in this module.
 #![deny(clippy::string_slice, clippy::indexing_slicing)]

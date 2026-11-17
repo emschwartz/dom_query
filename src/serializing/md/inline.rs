@@ -311,6 +311,7 @@ impl InlineWriter {
         self.write_owed_space(out, owed, source)
     }
 
+    /// Whether a space is owed before `next`; also clears the debt, so it answers once.
     fn owes_space(&mut self, next: char) -> bool {
         // a hard break owed is whitespace
         std::mem::take(&mut self.separator_after)

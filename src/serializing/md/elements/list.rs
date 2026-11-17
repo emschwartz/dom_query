@@ -232,8 +232,8 @@ fn parse_list_number(value: &str) -> Option<u32> {
         None => (false, value.strip_prefix('+').unwrap_or(value)),
     };
     // Extract the contiguous sequence of ASCII digits
-    let digits = value.trim_start_matches(|c: char| c.is_ascii_digit());
-    let digits = value.strip_suffix(digits).unwrap_or_default();
+    let rest = value.trim_start_matches(|c: char| c.is_ascii_digit());
+    let digits = value.strip_suffix(rest).unwrap_or_default();
     if digits.is_empty() {
         return None;
     }

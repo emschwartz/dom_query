@@ -84,6 +84,23 @@ impl Lines {
         }
     }
 
+    /// Pushes the lines of a block after its first, each on a line of its own.
+    pub(super) fn push_following_lines(&mut self, rest: &str) {
+        if self.prefix.is_empty() && !self.cell {
+            // no prefix and no cell: the lines go in as they are
+            self.text.push('\n');
+            self.text.push_str(rest);
+            let last = rest.rsplit('\n').next().unwrap_or_default();
+            self.prefix_due = last.is_empty();
+            self.line_start = Some(self.text.len() - last.len());
+            return;
+        }
+        for line in rest.split('\n') {
+            self.new_line();
+            self.push_str(line);
+        }
+    }
+
     pub(super) fn new_line(&mut self) {
         if self.cell {
             self.write_prefix();

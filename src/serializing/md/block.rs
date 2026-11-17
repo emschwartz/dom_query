@@ -548,8 +548,9 @@ impl BlockWriter {
         // a block that starts a fragment writes no line break before it, but is one
         self.wrote_block = true;
         let (start, end) = block.edges();
-        let mut rest = lines.split('\n');
-        let first = rest.next().unwrap_or_default();
+        let (first, rest) = lines
+            .split_once('\n')
+            .map_or((lines, None), |(f, r)| (f, Some(r)));
         self.owe(Separator::LineBreak);
         if first.is_empty() {
             let _ = self.write_separator(start, None);
@@ -560,10 +561,10 @@ impl BlockWriter {
         }
         // the lines after the first are not blocks of their own: they only break the line
         let (mut last, mut wrote_text) = (first, !first.is_empty());
-        for line in rest {
-            self.lines.new_line();
-            self.lines.push_str(line);
-            (last, wrote_text) = (line, wrote_text || !line.is_empty());
+        if let Some(rest) = rest {
+            self.lines.push_following_lines(rest);
+            last = rest.rsplit('\n').next().unwrap_or_default();
+            wrote_text = wrote_text || rest.bytes().any(|b| b != b'\n');
         }
         // an empty last line still owes its line break; a written one's spaces are content
         if last.is_empty() {

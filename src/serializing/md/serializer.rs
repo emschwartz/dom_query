@@ -61,23 +61,25 @@ impl<'a> MDSerializer<'a> {
         opts: FormatOpts,
     ) -> bool {
         let depth = self.depth.get();
-        // these handlers add one frame at most: they dispatch to no other handler, or a heading
-        // outside a cell only to children past the cap (link text holds no heading)
-        let leaf = match e.name.local {
-            local_name!("img")
-            | local_name!("input")
-            | local_name!("pre")
-            | local_name!("code") => true,
-            local_name!("h1")
-            | local_name!("h2")
-            | local_name!("h3")
-            | local_name!("h4")
-            | local_name!("h5")
-            | local_name!("h6") => !opts.table_cell,
-            _ => false,
-        };
-        if depth >= MAX_NESTING && !leaf {
-            return false;
+        if depth >= MAX_NESTING {
+            // these handlers add one frame at most: they dispatch to no other handler, or a
+            // heading outside a cell only to children past the cap (link text holds no heading)
+            let leaf = match e.name.local {
+                local_name!("img")
+                | local_name!("input")
+                | local_name!("pre")
+                | local_name!("code") => true,
+                local_name!("h1")
+                | local_name!("h2")
+                | local_name!("h3")
+                | local_name!("h4")
+                | local_name!("h5")
+                | local_name!("h6") => !opts.table_cell,
+                _ => false,
+            };
+            if !leaf {
+                return false;
+            }
         }
         self.depth.set(depth + 1);
         let handled = elements::write_element(self, out, e, id, opts);

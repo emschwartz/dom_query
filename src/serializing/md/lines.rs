@@ -4,31 +4,31 @@ pub(super) struct Lines {
     text: String,
     prefix: String,
     /// The length of the prefix an empty line takes: up to the last quote.
-    blank: usize,
-    /// The prefix is due before the next character; a line that ends first takes `blank`.
+    blank_prefix_len: usize,
+    /// The prefix is due before the next character; a line that ends first takes `blank_prefix_len`.
     prefix_due: bool,
     /// Where the content of the last line starts, if known: a fragment may start mid-line.
     line_start: Option<usize>,
     /// A table cell joins its lines with `<br>` and indents only marker lines.
-    cell: bool,
+    in_cell: bool,
 }
 
 /// How much of the prefix was there before a quote or item added its part.
 #[derive(Clone, Copy, Default)]
 pub(super) struct PrefixMark {
     len: usize,
-    blank: usize,
+    blank_prefix_len: usize,
 }
 
 impl Lines {
-    pub(super) const fn new(text: String, cell: bool) -> Self {
+    pub(super) const fn new(text: String, in_cell: bool) -> Self {
         Self {
             text,
             prefix: String::new(),
-            blank: 0,
+            blank_prefix_len: 0,
             prefix_due: false,
             line_start: None,
-            cell,
+            in_cell,
         }
     }
 
@@ -86,7 +86,7 @@ impl Lines {
 
     /// Pushes the lines of a block after its first, each on a line of its own.
     pub(super) fn push_following_lines(&mut self, rest: &str) {
-        if self.prefix.is_empty() && !self.cell {
+        if self.prefix.is_empty() && !self.in_cell {
             // no prefix and no cell: the lines go in as they are
             self.text.push('\n');
             self.text.push_str(rest);
@@ -102,13 +102,13 @@ impl Lines {
     }
 
     pub(super) fn new_line(&mut self) {
-        if self.cell {
+        if self.in_cell {
             self.write_prefix();
             self.text.push_str("<br>");
             return;
         }
         if std::mem::take(&mut self.prefix_due) {
-            let blank = self.prefix.get(..self.blank).unwrap_or_default();
+            let blank = self.prefix.get(..self.blank_prefix_len).unwrap_or_default();
             self.text.push_str(blank);
         }
         self.text.push('\n');
@@ -124,7 +124,7 @@ impl Lines {
     /// Ends the line with a hard break.
     pub(super) fn hard_break(&mut self) {
         self.push_str("  ");
-        if self.cell {
+        if self.in_cell {
             self.text.push_str("<br>");
         } else {
             self.text.push('\n');
@@ -168,20 +168,20 @@ impl Lines {
     pub(super) fn prefix_mark(&self) -> PrefixMark {
         PrefixMark {
             len: self.prefix.len(),
-            blank: self.blank,
+            blank_prefix_len: self.blank_prefix_len,
         }
     }
 
     pub(super) fn restore_prefix(&mut self, mark: PrefixMark) {
         self.prefix.truncate(mark.len);
-        self.blank = mark.blank;
+        self.blank_prefix_len = mark.blank_prefix_len;
     }
 
     /// Writes a quote's `> `, which every line after it starts with too.
     pub(super) fn push_quote(&mut self) {
         self.push_str("> ");
         self.prefix.push_str("> ");
-        self.blank = self.prefix.len();
+        self.blank_prefix_len = self.prefix.len();
     }
 
     /// Writes an item's marker after `indent` spaces; the lines after it start with as many

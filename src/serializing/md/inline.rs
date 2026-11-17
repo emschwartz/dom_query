@@ -36,7 +36,7 @@ pub(super) struct InlineWriter {
 #[derive(Clone, Copy)]
 pub(super) struct Fragment<'a> {
     pub(super) text: &'a str,
-    pub(super) ends: &'a InlineWriter,
+    pub(super) writer: &'a InlineWriter,
 }
 
 /// A finished emphasis run, written once what follows shows whether its delimiters fit.
@@ -194,23 +194,23 @@ impl InlineWriter {
             Inline::Emphasis { content: run, .. } | Inline::Link { label: run, .. }
                 if run.text.is_empty() =>
             {
-                if run.ends.boundary_before || run.ends.boundary_after {
+                if run.writer.boundary_before || run.writer.boundary_after {
                     self.push(out, Inline::WordBoundary);
                 }
             }
             Inline::Emphasis { kind, content } => {
-                if content.ends.boundary_before {
+                if content.writer.boundary_before {
                     self.push(out, Inline::WordBoundary);
                 }
-                let first = content.ends.first_visible.unwrap_or(WORD);
+                let first = content.writer.first_visible.unwrap_or(WORD);
                 self.push_emphasis(out, kind, content.text, first);
-                self.shown_run(content.ends);
+                self.shown_run(content.writer);
             }
             Inline::Link { label, href, title } => {
-                if label.ends.boundary_before {
+                if label.writer.boundary_before {
                     self.push(out, Inline::WordBoundary);
                 }
-                self.start_piece(out, label.ends.first_visible.unwrap_or(WORD), Some('['));
+                self.start_piece(out, label.writer.first_visible.unwrap_or(WORD), Some('['));
                 out.edit_line(|text, _| {
                     // an unescaped `!` before `[` would make image syntax
                     escape_trailing_bang(text);
@@ -223,7 +223,7 @@ impl InlineWriter {
                     }
                     text.push(')');
                 });
-                self.shown_run(label.ends);
+                self.shown_run(label.writer);
                 self.written = LastWritten::Edge;
             }
         }
@@ -232,7 +232,7 @@ impl InlineWriter {
     /// Block output written as it is ends the inline run: it drops a word boundary waiting
     /// for it, and its last character is the visible end.
     pub(super) fn push_raw(&mut self, out: &mut Lines, s: &str) {
-        self.finish(out);
+        self.settle_at_end(out);
         self.ending_space = false;
         debug_assert!(
             !s.is_empty(),
@@ -246,7 +246,7 @@ impl InlineWriter {
     }
 
     /// Writes a pending run: what follows is the end of the line or of the enclosing markup.
-    pub(super) fn finish(&mut self, out: &mut Lines) {
+    pub(super) fn settle_at_end(&mut self, out: &mut Lines) {
         self.settle(out, None);
     }
 

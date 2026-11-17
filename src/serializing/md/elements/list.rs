@@ -55,7 +55,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
                 Preceding::Stray(end) => end == BlockEnd::Lazy,
                 Preceding::Nothing => false,
             };
-            if out.starts_content(|out| h.write(out, child.id, stray_opts)) {
+            if out.starts_line_or_block(|out| h.write(out, child.id, stray_opts)) {
                 // text that starts the list would be underlined by an empty item after it
                 preceding = Preceding::Stray(if lazy {
                     BlockEnd::Lazy

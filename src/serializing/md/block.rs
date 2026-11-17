@@ -224,7 +224,7 @@ pub(super) struct EmphasisParagraph {
     pub(super) before: Separator,
     pub(super) start: BlockStart,
     text: String,
-    pub(super) ends: InlineWriter,
+    pub(super) writer: InlineWriter,
 }
 
 impl EmphasisParagraph {
@@ -233,7 +233,7 @@ impl EmphasisParagraph {
             before,
             start,
             text: String::new(),
-            ends: InlineWriter::new(),
+            writer: InlineWriter::new(),
         }
     }
 
@@ -241,7 +241,7 @@ impl EmphasisParagraph {
     pub(super) fn content(&self) -> Fragment<'_> {
         Fragment {
             text: &self.text,
-            ends: &self.ends,
+            writer: &self.writer,
         }
     }
 }
@@ -283,8 +283,8 @@ pub(super) struct BlockWriter {
     frames: Vec<Frame>,
     /// The separator owed is written as it is, past the gap rules of the lists around.
     owed_exactly: bool,
-    /// Counts the separators settled before content; only `starts_content` reads it.
-    content_starts: usize,
+    /// Counts the separators settled before content; only `starts_line_or_block` reads it.
+    starts_written: usize,
     /// Something past one inline run was written: a block, a line break, a marker or a
     /// paragraph kept apart.
     wrote_block: bool,
@@ -308,7 +308,7 @@ impl BlockWriter {
             line_open: true,
             frames: Vec::new(),
             owed_exactly: false,
-            content_starts: 0,
+            starts_written: 0,
             wrote_block: false,
             owed_before: Separator::None,
             paragraphs: None,
@@ -335,7 +335,7 @@ impl BlockWriter {
         {
             return None;
         }
-        self.inline.finish(&mut self.lines);
+        self.inline.settle_at_end(&mut self.lines);
         // a space at the end goes after the last run, as in `finish_fragment`
         self.inline.write_ending_space(&mut self.lines);
         let owed = std::mem::take(&mut self.owed);
@@ -363,7 +363,7 @@ impl BlockWriter {
                 let _ = self.write_separator(p.start, None);
             }
             self.lines.push_lines(&p.text);
-            self.inline = p.ends;
+            self.inline = p.writer;
         }
         self.owed = after;
     }
@@ -371,12 +371,12 @@ impl BlockWriter {
     /// Moves the paragraph written to the last of `paragraphs`.
     fn keep_paragraph(&mut self, paragraphs: &mut Vec<EmphasisParagraph>) {
         let text = self.lines.take();
-        let ends = std::mem::replace(&mut self.inline, InlineWriter::new());
+        let writer = std::mem::replace(&mut self.inline, InlineWriter::new());
         match paragraphs.last_mut() {
-            Some(last) => (last.text, last.ends) = (text, ends),
+            Some(last) => (last.text, last.writer) = (text, writer),
             None => paragraphs.push(EmphasisParagraph {
                 text,
-                ends,
+                writer,
                 ..EmphasisParagraph::new(Separator::None, BlockStart::Text)
             }),
         }
@@ -401,7 +401,7 @@ impl BlockWriter {
     /// holds a block.
     pub(super) fn finish_fragment(&mut self) -> bool {
         // a hard break at the end belongs to the line the run is on; two end a paragraph
-        self.inline.finish(&mut self.lines);
+        self.inline.settle_at_end(&mut self.lines);
         self.wrote_block |= self.breaks_before(Separator::None, false) == Separator::BlankLine;
         self.inline.write_breaks(&mut self.lines);
         self.inline.write_ending_space(&mut self.lines);
@@ -429,7 +429,7 @@ impl BlockWriter {
     pub(super) fn content(&self) -> Fragment<'_> {
         Fragment {
             text: self.lines.as_str(),
-            ends: &self.inline,
+            writer: &self.inline,
         }
     }
 
@@ -470,7 +470,7 @@ impl BlockWriter {
     /// Writes a text node; text that continues the line, the common case, skips `push`.
     #[inline]
     pub(super) fn push_text(&mut self, s: &str, opts: FormatOpts) {
-        if self.starts_content_line() || self.inline.breaks() > 1 {
+        if self.content_needs_start() || self.inline.breaks() > 1 {
             return self.push(Inline::Text(s, opts));
         }
         self.inline.push_text(&mut self.lines, s, opts);
@@ -479,7 +479,7 @@ impl BlockWriter {
     /// Whether `inline` shows content, which needs what is owed written before it.
     fn shows(&self, inline: &Inline) -> bool {
         // whitespace next to a block boundary shows nothing
-        let blank_shows = || !self.starts_content_line() && self.inline.breaks() == 0;
+        let blank_shows = || !self.content_needs_start() && self.inline.breaks() == 0;
         match inline {
             Inline::WordBoundary => false,
             Inline::Text(s, _) => !s.trim_ascii().is_empty() || blank_shows(),
@@ -504,16 +504,16 @@ impl BlockWriter {
         if sep >= Separator::LineBreak && self.owed < Separator::LineBreak {
             self.end_inline(true);
         } else if sep == Separator::Space {
-            self.inline.finish(&mut self.lines);
+            self.inline.settle_at_end(&mut self.lines);
         }
         self.owed = self.owed.max(sep);
     }
 
     /// Runs `write`; whether what it wrote started a line or block.
-    pub(super) fn starts_content(&mut self, write: impl FnOnce(&mut Self)) -> bool {
-        let starts = self.content_starts;
+    pub(super) fn starts_line_or_block(&mut self, write: impl FnOnce(&mut Self)) -> bool {
+        let starts = self.starts_written;
         write(self);
-        self.content_starts != starts
+        self.starts_written != starts
     }
 
     /// Owes `sep` before content that is no block of an item, which the gap rules don't change.
@@ -670,7 +670,7 @@ impl BlockWriter {
     /// Ends the inline content in progress: what it holds back is written, its trailing spaces
     /// dropped.
     fn end_inline(&mut self, trim: bool) {
-        self.inline.finish(&mut self.lines);
+        self.inline.settle_at_end(&mut self.lines);
         if trim {
             self.inline.drop_ending_space();
         } else {
@@ -682,7 +682,7 @@ impl BlockWriter {
     /// Writes what content starting as `start` needs first: the separator owed, a new line's
     /// prefix and the markers of the items it starts; `head` is its first line, `None` inline.
     fn start_content(&mut self, start: BlockStart, head: Option<&str>) {
-        if self.starts_content_line() {
+        if self.content_needs_start() {
             self.start_block(start, head);
         }
     }
@@ -693,7 +693,7 @@ impl BlockWriter {
     }
 
     /// Content written now needs a separator, a line prefix or a marker before it.
-    fn starts_content_line(&self) -> bool {
+    fn content_needs_start(&self) -> bool {
         self.owed != Separator::None || !self.line_open || self.marker_due()
     }
 
@@ -763,7 +763,7 @@ impl BlockWriter {
             self.line_open = false;
             self.wrote_block = true;
         }
-        self.content_starts += 1;
+        self.starts_written += 1;
         sep
     }
 
@@ -785,7 +785,7 @@ impl BlockWriter {
         paragraphs.push(EmphasisParagraph::new(before, start));
         self.paragraphs = Some(paragraphs);
         self.line_open = true;
-        self.content_starts += 1;
+        self.starts_written += 1;
         Separator::None
     }
 

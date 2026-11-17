@@ -252,7 +252,7 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
             } else {
                 out.ensure_hard_break();
             }
-            // an item that wrote nothing still sets the text around it apart, as on main
+            // an item that wrote nothing still sets the text around it apart
             if name.local == local_name!("li") && out.owed() >= Separator::LineBreak {
                 out.owe(Separator::BlankLine);
             }

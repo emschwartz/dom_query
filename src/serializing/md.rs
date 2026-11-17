@@ -3355,6 +3355,10 @@ fn main() {
         );
         let expected = format!("{}![al](i.png)`a*b`", "> ".repeat(constants::MAX_NESTING));
         html_2md_compare(&html, &expected);
+        // a heading keeps its marker: its content past the limit is written as plain text
+        let html = format!("{}<h2>h<em>e</em></h2>", "<blockquote>".repeat(depth + 40));
+        let expected = format!("{}## he", "> ".repeat(constants::MAX_NESTING));
+        html_2md_compare(&html, &expected);
         let html = format!(
             "{}<input type=\"checkbox\" checked>x",
             "<ul><li>".repeat(constants::MAX_NESTING)

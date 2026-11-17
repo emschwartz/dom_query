@@ -244,14 +244,6 @@ impl EmphasisParagraph {
             ends: &self.ends,
         }
     }
-
-    /// The paragraph being written; the first is created here.
-    fn last_or_new(paragraphs: &mut Vec<Self>) -> &mut Self {
-        if paragraphs.is_empty() {
-            paragraphs.push(Self::new(Separator::None, BlockStart::Text));
-        }
-        paragraphs.last_mut().expect("one was pushed")
-    }
 }
 
 /// A quote or list item being written.
@@ -378,9 +370,16 @@ impl BlockWriter {
 
     /// Moves the paragraph written to the last of `paragraphs`.
     fn keep_paragraph(&mut self, paragraphs: &mut Vec<EmphasisParagraph>) {
-        let last = EmphasisParagraph::last_or_new(paragraphs);
-        last.text = self.lines.take();
-        last.ends = std::mem::replace(&mut self.inline, InlineWriter::new());
+        let text = self.lines.take();
+        let ends = std::mem::replace(&mut self.inline, InlineWriter::new());
+        match paragraphs.last_mut() {
+            Some(last) => (last.text, last.ends) = (text, ends),
+            None => paragraphs.push(EmphasisParagraph {
+                text,
+                ends,
+                ..EmphasisParagraph::new(Separator::None, BlockStart::Text)
+            }),
+        }
     }
 
     /// A document of its own, which starts at a line start.
@@ -730,8 +729,10 @@ impl BlockWriter {
         };
         let mut sep = gap.sep;
         // a paragraph kept apart ends here instead
-        if sep >= Separator::LineBreak && self.paragraphs.is_some() {
-            return self.next_paragraph(sep, start);
+        if sep >= Separator::LineBreak {
+            if let Some(paragraphs) = self.paragraphs.take() {
+                return self.next_paragraph(paragraphs, sep, start);
+            }
         }
         // an empty `>` line ends a quote's paragraph without the blank line
         if gap.prev == Some(BlockEnd::Quote)
@@ -766,21 +767,21 @@ impl BlockWriter {
     }
 
     /// Keeps the paragraph written apart and starts the next, set off by `before`.
-    fn next_paragraph(&mut self, before: Separator, start: BlockStart) -> Separator {
-        let Some(mut paragraphs) = self.paragraphs.take() else {
-            return Separator::None;
-        };
+    fn next_paragraph(
+        &mut self,
+        mut paragraphs: Vec<EmphasisParagraph>,
+        before: Separator,
+        start: BlockStart,
+    ) -> Separator {
+        // nothing written yet (`owe` writes a pending run before a line break): the first paragraph
         if self.lines.as_str().is_empty() {
             // its hard breaks are in `before` already
             self.inline.take_breaks(&mut self.lines);
-            let last = EmphasisParagraph::last_or_new(&mut paragraphs);
-            last.before = last.before.max(before);
-            last.start = start;
         } else {
             self.keep_paragraph(&mut paragraphs);
-            paragraphs.push(EmphasisParagraph::new(before, start));
             self.wrote_block = true;
         }
+        paragraphs.push(EmphasisParagraph::new(before, start));
         self.paragraphs = Some(paragraphs);
         self.line_open = true;
         self.content_starts += 1;
@@ -799,7 +800,9 @@ impl BlockWriter {
         // how the block starting at frame `j` starts: a quote's or item's own start, else the content's
         let block_start = |j: usize| match self.frames.get(j).map(|f| &f.prefix) {
             Some(LinePrefix::Quote) => BlockStart::Quote,
-            Some(LinePrefix::ListItem { .. }) if self.interrupts(j, head) => BlockStart::Block,
+            Some(LinePrefix::ListItem { marker, .. }) if self.interrupts(j, marker, head) => {
+                BlockStart::Block
+            }
             Some(LinePrefix::ListItem { .. }) => BlockStart::List,
             _ => start,
         };
@@ -821,11 +824,9 @@ impl BlockWriter {
                 }),
                 _,
             ) => (owed.max(block_gap(*end, new_block)), Some(*end)),
-            // the content is a new block of the enclosing item, after a line break or opening a
-            // quote or list in it; text that continues the item's line keeps what is owed
-            (_, Some(outer))
-                if outer.is_item() && (owed >= Separator::LineBreak || i < self.frames.len()) =>
-            {
+            // the content is a new block of the enclosing item, after a line break (opening a
+            // quote or list owes one); text that continues the item's line keeps what is owed
+            (_, Some(outer)) if outer.is_item() && owed >= Separator::LineBreak => {
                 (block_gap(outer.item_end, new_block), Some(outer.item_end))
             }
             _ => (owed, None),
@@ -869,13 +870,9 @@ impl BlockWriter {
         }
     }
 
-    /// Whether the marker line of the item at `i` interrupts a paragraph: it holds content,
-    /// `head`, and is a bullet or numbered 1.
-    fn interrupts(&self, i: usize, head: Option<&str>) -> bool {
-        let Some(LinePrefix::ListItem { marker, .. }) = self.frames.get(i).map(|f| &f.prefix)
-        else {
-            return false;
-        };
+    /// Whether the marker line of the item at `i`, with `marker`, interrupts a paragraph: it
+    /// holds content, `head`, and is a bullet or numbered 1.
+    fn interrupts(&self, i: usize, marker: &str, head: Option<&str>) -> bool {
         let numbered = marker.starts_with(|c: char| c.is_ascii_digit());
         head != Some("")
             && !self.rule_like(i, head)
@@ -918,17 +915,14 @@ impl BlockWriter {
         }
         for i in first..last {
             self.wrote_block = true;
-            // an item whose first line holds a nested item keeps its nested lists at its
-            // content column: this marks the outer frame, for `item_indent` on later lines
-            if i > first && self.frames.get(i).is_some_and(Frame::is_item) {
-                if let Some(outer) = self.frames.get_mut(i - 1) {
-                    outer.starts_with_list |= outer.is_item();
-                }
-            }
             let indent = self.item_indent(i);
+            let nested_item = self.frames.get(i + 1).is_some_and(Frame::is_item);
             let Some(f) = self.frames.get_mut(i) else {
                 break;
             };
+            // an item whose first line holds a nested item keeps its nested lists at its
+            // content column, for `item_indent` on later lines
+            f.starts_with_list |= nested_item && f.is_item();
             f.marker_due = false;
             f.outer_prefix = self.lines.prefix_mark();
             match &f.prefix {

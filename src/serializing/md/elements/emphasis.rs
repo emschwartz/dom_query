@@ -1,6 +1,6 @@
 use html5ever::{QualName, local_name};
 
-use crate::{Element, NodeId};
+use crate::NodeId;
 
 use super::super::block::{Block, BlockStart, BlockWriter, EmphasisParagraph, Separator};
 use super::super::ctx::{EmphasisScope, FormatOpts};
@@ -16,7 +16,7 @@ pub(in crate::serializing::md) enum Emphasis {
 }
 
 impl Emphasis {
-    const fn of(name: &QualName) -> Option<Self> {
+    pub(in crate::serializing::md) const fn of(name: &QualName) -> Option<Self> {
         match name.local {
             local_name!("strong") | local_name!("b") => Some(Self::Bold),
             local_name!("em") | local_name!("i") => Some(Self::Italic),
@@ -71,13 +71,8 @@ impl Emphasis {
         }
         let first = content.trim_start_matches(delim).chars().next();
         let last = content.trim_end_matches(delim).chars().next_back();
-        let (Some(first), Some(last)) = (first, last) else {
-            return true;
-        };
-        !first.is_whitespace()
-            && !last.is_whitespace()
-            && opens(before, first)
-            && closes(last, after)
+        first.is_none_or(|first| !first.is_whitespace() && opens(before, first))
+            && last.is_none_or(|last| !last.is_whitespace() && closes(last, after))
     }
 
     /// Whether a run of this kind starting with `right` can merge into one ending with `left`,
@@ -213,19 +208,17 @@ impl<'a> Edges<'a> {
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
     out: &mut BlockWriter,
-    el: &Element,
+    kind: Emphasis,
     id: NodeId,
     opts: FormatOpts,
 ) {
-    let Some(kind) = Emphasis::of(&el.name) else {
-        return;
-    };
     let em_opts = opts.include_node().inline().emphasis_scope(kind.scope());
     // inside the same emphasis, its delimiters would close the outer run
     if opts.emphasis_scope.contains(kind.scope()) {
         return h.write_children(out, id, em_opts);
     }
-    let may_hold_blocks = !opts.link_body && !opts.table_cell && !opts.heading;
+    // a heading's content is a link body or a cell's
+    let may_hold_blocks = !opts.link_body && !opts.table_cell;
     let mut run = BlockWriter::fragment(h.take_buf(), em_opts);
     // a run can't span a blank line: each paragraph inside gets its own
     if may_hold_blocks {

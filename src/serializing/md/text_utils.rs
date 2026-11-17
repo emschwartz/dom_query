@@ -7,7 +7,6 @@ use super::ctx::FormatOpts;
 pub(super) const NEVER_AT_LINE_START: usize = usize::MAX;
 
 /// Pushes the words of `new_text`, escaped; `line` is where the last line of `text` starts.
-#[allow(clippy::cast_possible_truncation)]
 pub(super) fn push_normalized_text(
     text: &mut String,
     line: usize,
@@ -89,10 +88,9 @@ fn ends_with_marker_digits(text: &str, line: usize) -> bool {
 /// An ordered-list marker like `3.` or `12)` at the beginning of a line would
 /// otherwise turn the line into a list item.
 fn is_ordered_list_marker(chunk: &str) -> bool {
-    let Some((&last, digits)) = chunk.as_bytes().split_last() else {
-        return false;
-    };
-    matches!(last, b'.' | b')') && !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
+    chunk
+        .strip_suffix(['.', ')'])
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Appends `content` to `out`, putting a backslash before every `|`.

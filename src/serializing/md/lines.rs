@@ -100,19 +100,8 @@ impl Lines {
 
     /// Ends the line, and leaves the next empty.
     pub(super) fn blank_line(&mut self) {
-        if self.cell {
-            self.write_prefix();
-            self.text.push_str("<br><br>");
-            return;
-        }
-        let blank = self.prefix.get(..self.blank).unwrap_or_default();
-        if std::mem::take(&mut self.prefix_due) {
-            self.text.push_str(blank);
-        }
-        self.text.push('\n');
-        self.text.push_str(blank);
-        self.text.push('\n');
-        self.prefix_due = true;
+        self.new_line();
+        self.new_line();
     }
 
     /// Ends the line with a hard break.

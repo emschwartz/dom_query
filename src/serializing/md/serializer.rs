@@ -247,8 +247,8 @@ fn close_element(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
                 out.owe(Separator::BlankLine);
             }
         }
-    } else if matches!(name.local, local_name!("td") | local_name!("th")) {
-        // a table written as text keeps its cells apart
+    } else {
+        // a `<td>` or `<th>`, the last link block: a table written as text keeps its cells apart
         out.owe(Separator::Space);
     }
 }

@@ -393,7 +393,7 @@ impl InlineWriter {
     /// A run that ends in a hard break waits on nothing, so it is written at once.
     fn write_if_hard_end(&mut self, out: &mut Lines, edges: &Edges) {
         if !edges.hard_end.is_empty() {
-            self.write_pending(out, Some('\n'));
+            self.settle(out, Some('\n'));
             self.breaks += 1;
         }
     }
@@ -436,16 +436,13 @@ impl InlineWriter {
     /// Writes the pending run, with delimiters if they fit before `after`, else as html.
     #[inline]
     fn settle(&mut self, out: &mut Lines, after: Option<char>) {
-        if self.pending_run.is_some() {
-            self.write_pending(out, after);
+        if let Some(run) = self.pending_run.take() {
+            self.write_pending(out, run, after);
         }
     }
 
     #[inline(never)]
-    fn write_pending(&mut self, out: &mut Lines, after: Option<char>) {
-        let Some(mut run) = self.pending_run.take() else {
-            return;
-        };
+    fn write_pending(&mut self, out: &mut Lines, mut run: EmphasisRun, after: Option<char>) {
         let after = run.trail.chars().next().or(after);
         let (kind, start) = (run.kind, run.start);
         if start.delimiters_fit(kind, &run.content, after) {

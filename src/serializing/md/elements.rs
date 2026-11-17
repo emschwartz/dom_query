@@ -45,15 +45,6 @@ pub(super) fn write_element<H: MDHost>(
         },
         local_name!("img") => image::write(h, out, e, id, opts),
         local_name!("pre") | local_name!("code") => code::write(h, out, e, id, opts),
-        local_name!("strong")
-        | local_name!("b")
-        | local_name!("em")
-        | local_name!("i")
-        | local_name!("del")
-        | local_name!("s")
-        | local_name!("strike") => {
-            emphasis::write(h, out, e, id, opts);
-        }
         local_name!("h1")
         | local_name!("h2")
         | local_name!("h3")
@@ -64,7 +55,10 @@ pub(super) fn write_element<H: MDHost>(
         {
             heading::write(h, out, e, id, opts);
         }
-        _ => return false,
+        _ => match emphasis::Emphasis::of(&e.name) {
+            Some(kind) => emphasis::write(h, out, kind, id, opts),
+            None => return false,
+        },
     }
     true
 }

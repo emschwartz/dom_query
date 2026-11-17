@@ -7,8 +7,8 @@ pub(super) const fn md_prefix(name: &QualName) -> &'static str {
         local_name!("h3") => "### ",
         local_name!("h4") => "#### ",
         local_name!("h5") => "##### ",
-        local_name!("h6") => "###### ",
-        _ => "",
+        // h6, the last heading `write_element` dispatches here
+        _ => "###### ",
     }
 }
 

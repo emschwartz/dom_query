@@ -3,7 +3,7 @@ use crate::{NodeId, NodeRef};
 use super::super::block::{Block, BlockWriter, Separator};
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
-use super::super::text_utils::{push_escaped_pipes, trim_trailing_space};
+use super::super::text_utils::push_escaped_pipes;
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
@@ -47,7 +47,6 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             let mut cell = BlockWriter::fragment(h.take_buf(), opts);
             h.write(&mut cell, cell_ref.id, opts);
             let mut cell_text = cell.finish();
-            trim_trailing_cell_break(&mut cell_text);
             // a break that starts the cell needs no spaces before its `<br>`
             cell_text.drain(..cell_text.len() - cell_text.trim_start_matches(' ').len());
             escape_table_cell_inplace(&mut cell_text);
@@ -107,21 +106,6 @@ fn write_as_text<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: Form
     }
 }
 
-/// Drops trailing cell linebreaks left by a final `<br>` or block child.
-fn trim_trailing_cell_break(text: &mut String) {
-    while ends_with_cell_break(text) {
-        text.truncate(text.len() - "<br>".len());
-        trim_trailing_space(text);
-    }
-}
-
-/// Whether the text ends with a cell linebreak rather than escaped cell text:
-/// `\<br>` is text, `\\<br>` is an escaped backslash and then a linebreak.
-fn ends_with_cell_break(text: &str) -> bool {
-    text.strip_suffix("<br>")
-        .is_some_and(|rest| (rest.len() - rest.trim_end_matches('\\').len()) % 2 == 0)
-}
-
 fn is_table_node_writable(rows: &[NodeRef], header_id: Option<NodeId>) -> bool {
     let mut common_cell_count: usize = 0;
     for row in rows {
@@ -143,12 +127,11 @@ fn has_nested_table(table: &NodeRef) -> bool {
 }
 
 fn push_cells(text: &mut String, cells: &[String]) {
-    if let Some((first, rest)) = cells.split_first() {
-        text.push_str(first);
-        for cell in rest {
+    for (i, cell) in cells.iter().enumerate() {
+        if i > 0 {
             text.push_str(" | ");
-            text.push_str(cell);
         }
+        text.push_str(cell);
     }
 }
 

@@ -19,9 +19,12 @@ All notable changes to the `dom_query` crate will be documented in this file.
 - **Markdown**: speed up text escaping by replacing the linear `ALWAYS_ESCAPED`/`LINE_START_ESCAPED` byte-slice lookups with `matches!` predicates, and by checking ordered-list markers on bytes. No public API changes.
 - **Markdown**: a link destination with nothing to escape is no longer copied.
 - **Markdown**: write table cells straight into the output instead of joining each row into a temporary `String` first.
+- **Markdown**: write through a `BlockWriter` and an `InlineWriter` instead of writing first and then trimming, re-indenting or re-reading the output. The separator between blocks, the space an `<svg>` or `<option>` leaves, trailing spaces, hard breaks and an emphasis run are owed until the next visible content shows what they should be; `Lines` is the only writer of line breaks and of the `> ` and list item prefixes. List items are written in place, which removes `text_iter.rs` and the list read-back helpers. About 18% fewer instructions per call on `rustwiki.html` and 42% on a flat list of 5,000 items. The module denies `clippy::string_slice` and `clippy::indexing_slicing`, so slicing cannot panic.
 - `Selection::children`, `parent`, `ancestors`, `next_sibling`, `prev_sibling`, `add`, `add_matcher`, `add_selection`, `filter_selection` and `is_selection` track the nodes already collected in a bit set instead of scanning the result for each node; they took quadratic time in the size of the selection. No output changes.
 
 ### Fixed
+- **Markdown**: decide the space an `<svg>` or `<option>` leaves from the visible characters on both sides, through emphasis and link markup: `<p>a<svg></svg><b>.</b></p>` gives `a<strong>.</strong>` instead of `a **.**`, and `<p><b>(</b><svg></svg>x</p>` gives `<strong>(</strong>x` instead of `<strong>(</strong> x`.
+- **Markdown**: decide `**` or `<strong>` for an emphasis run from the character that follows it in the output, instead of walking the DOM for it, and write the edge spaces and hard breaks of a run outside its delimiters in the `<strong>` form too.
 - `Selection::filter_selection` returns an empty selection when given an empty one; it returned the selection unchanged.
 - **Markdown**: keep text that follows a nested list inside its list item; it was written at column zero, outside the list.
 - **Markdown**: text directly inside a list ends its line before the next item, so `<ul>Partei<li>a</li></ul>` no longer gives `Partei- a`, which lost the list.

@@ -542,22 +542,37 @@ impl BlockWriter {
         // a block that starts a fragment writes no line break before it, but is one
         self.wrote_block = true;
         let (start, end) = block.edges();
-        for (i, line) in lines.split('\n').enumerate() {
-            // the lines after the first are not blocks of their own
-            let start = if i == 0 { start } else { BlockStart::Block };
-            self.owe(Separator::LineBreak);
-            if line.is_empty() {
-                let _ = self.write_separator(start, None);
-                self.owed = Separator::LineBreak;
-                self.line_open = true;
-                continue;
-            }
-            self.start_content(start, Some(line));
-            self.paragraph.push_raw(&mut self.lines, line);
+        let mut rest = lines.split('\n');
+        let first = rest.next().unwrap_or_default();
+        self.owe(Separator::LineBreak);
+        if first.is_empty() {
+            let _ = self.write_separator(start, None);
+            self.owed = Separator::LineBreak;
+            self.line_open = true;
+        } else {
+            self.start_content(start, Some(first));
+            self.paragraph.push_raw(&mut self.lines, first);
             // its spaces are content
             self.lines.mark_line_start();
             self.paragraph.end_paragraph();
             self.set_last(end);
+        }
+        // the lines after the first are not blocks of their own: they only break the line
+        let mut last = None;
+        for line in rest {
+            self.lines.new_line();
+            self.lines.push_str(line);
+            last = Some(line);
+        }
+        match last {
+            Some("") => self.owed = Separator::LineBreak,
+            Some(_) => {
+                self.owed = Separator::None;
+                self.lines.mark_line_start();
+                self.paragraph.end_paragraph();
+                self.set_last(end);
+            }
+            None => {}
         }
     }
 

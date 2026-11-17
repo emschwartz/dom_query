@@ -683,6 +683,10 @@ impl BlockWriter {
             self.lead = self.lead.max(sep);
             sep = Separator::None;
         }
+        if sep == Separator::Space {
+            // a space held back at the end of the text is the separator's
+            self.paragraph.end_space(&mut self.lines, true);
+        }
         sep.write(&mut self.lines);
         if sep >= Separator::LineBreak {
             self.line_open = false;

@@ -2458,6 +2458,14 @@ The wind is passing by.
     }
 
     #[test]
+    fn test_block_after_trailing_space() {
+        html_2md_compare("<h2>a <p>b</p></h2>", "## a b");
+        html_2md_compare("<a href=\"u\">t <pre>x</pre></a>", "[t `x`](u)");
+        html_2md_compare("<h2>a <table><tr><td>b</td></tr></table></h2>", "## a b");
+        html_2md_compare("<a href=\"u\">t <div>x</div></a>", "[t x](u)");
+    }
+
+    #[test]
     fn test_empty_list_item_separates_text() {
         html_2md_compare("a<li></li>b", "a\n\nb");
         html_2md_compare("a<div></div>b", "a\n\nb");

@@ -3538,8 +3538,14 @@ fn main() {
             "<p><b>a<i>x</i></b><b><i>y</i>b</b></p>",
             "**a*x***<strong>*y*b</strong>",
         );
-        // `***a*b**` would fuse the openers into a run that the `*` after `a` closes early
-        html_2md_compare("<p><b><i>a</i>b</b></p>", "<strong>*a*b</strong>");
+        // the fused opener's first closer is the nested run's (`***a*b**`, `***a**b*`)
+        html_2md_compare("<p><b><i>a</i>b</b></p>", "***a*b**");
+        html_2md_compare("<p><em><strong>a</strong>b</em></p>", "***a**b*");
+        // but a second nested run's delimiters would close the fused opener early
+        html_2md_compare(
+            "<p><em><strong>a</strong>b<strong>c</strong>d</em></p>",
+            "<em>**a**b**c**d</em>",
+        );
         // an opener joining the closer before it (`**Hi***bar`) makes a run that `r**z` closes
         html_2md_compare(
             "<p><b>Hi</b><em>bar<b>z</b>x</em></p>",

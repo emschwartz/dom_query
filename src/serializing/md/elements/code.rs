@@ -9,20 +9,21 @@ use crate::{Element, NodeId};
 use super::super::constants::{CODE_LANGUAGE_ATTRIBUTES, CODE_LANGUAGE_PREFIX};
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
+use super::super::inline::{Inline, InlineWriter};
 use super::super::text_utils::{push_block_space, push_escaped_pipes, trim_trailing_space};
 use super::table::add_cell_block_break;
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    text: &mut String,
+    out: &mut InlineWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
 ) {
     if el.name.local == local_name!("pre") {
-        write_pre(h, text, id, opts);
+        out.write_block(|text| write_pre(h, text, id, opts));
     } else {
-        write_code(h, text, id, opts);
+        write_code(h, out, id, opts);
     }
 }
 
@@ -154,7 +155,7 @@ fn edge_line_breaks<H: MDHost>(h: &H, id: NodeId) -> (bool, bool) {
 /// Writes the content of the `<code>` block. Generally a `<code>` tag is used inline, but unfortunately
 /// it's also used instead of a `<pre>` block. In case the `<code>` block contains multiline
 /// text, it's handled as a `<pre>` code block.
-fn write_code<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts) {
+fn write_code<H: MDHost>(h: &H, out: &mut InlineWriter, id: NodeId, opts: FormatOpts) {
     let is_multiline = {
         let nodes = h.nodes();
         descendant_nodes(Ref::clone(&nodes), &id)
@@ -167,7 +168,7 @@ fn write_code<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts)
     };
 
     if is_multiline {
-        return write_pre(h, text, id, opts);
+        return out.write_block(|text| write_pre(h, text, id, opts));
     }
 
     // edge spaces are content, so keep them; whitespace around a line
@@ -189,7 +190,11 @@ fn write_code<H: MDHost>(h: &H, text: &mut String, id: NodeId, opts: FormatOpts)
     if starts_with_break {
         code_text.drain(..code_text.len() - code_text.trim_start_matches(' ').len());
     }
-    push_code_text(text, &code_text, opts.table_cell);
+    let mut span = h.scratch();
+    push_code_text(&mut span, &code_text, opts.table_cell);
+    if !span.is_empty() {
+        out.push(Inline::Code(&span));
+    }
 }
 
 fn find_code_lang_attribute(node: &TreeNode) -> Option<String> {
@@ -221,18 +226,20 @@ fn max_backtick_run(text: &str) -> usize {
     max
 }
 
+/// A code span right before would merge its closing run with the next one's opening:
+/// `x` and `y` would give `x``y`. An escaped backtick is text, which no span ends with.
+pub(in crate::serializing::md) fn ends_with_code_span(text: &str) -> bool {
+    text.strip_suffix('`')
+        .is_some_and(|before| before.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0)
+}
+
 fn push_code_text(text: &mut String, code_text: &str, in_cell: bool) {
     if code_text.is_empty() {
         return;
     }
 
-    // a code span right before would merge its closing run with this
-    // opening one: `x` and `y` would give `x``y`, a single span
-    if let Some(before) = text.strip_suffix('`') {
-        // an escaped backtick is text, which a code span never ends with (see below)
-        if before.bytes().rev().take_while(|&b| b == b'\\').count() % 2 == 0 {
-            text.push(' ');
-        }
+    if ends_with_code_span(text) {
+        text.push(' ');
     }
 
     let fence_len = max_backtick_run(code_text) + 1;

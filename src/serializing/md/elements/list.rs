@@ -7,6 +7,7 @@ use super::super::block::{is_block_wrapper, is_list, is_md_block};
 use super::super::constants::{LIST_OFFSET_BASE, MAX_LIST_NUMBER};
 use super::super::ctx::{FormatOpts, ListContext, ListKind};
 use super::super::host::MDHost;
+use super::super::inline::InlineWriter;
 use super::super::serializer::add_block_end;
 use super::super::text_utils::{add_linebreaks, linebreak, trim_trailing_space};
 use super::image::image_src;
@@ -43,10 +44,12 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let mut prev_item = None;
     // once stray content shows after the last item, whether it continues that item as a lazy line
     let mut lazy_stray = None;
+    // the inline text stray content leaves open, for the stray content after it
+    let mut run = None;
     for child in list.children_it(false) {
         if !child.has_name("li") {
             let prev = prev_item.take();
-            if write_stray(h, text, &child, prev, opts.table_cell) {
+            if write_stray(h, text, &child, prev, opts.table_cell, &mut run) {
                 let lazy = matches!(prev, Some(End::Text | End::Quote | End::Lazy));
                 lazy_stray = lazy_stray.or(Some(lazy));
             } else {
@@ -54,6 +57,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             }
             continue;
         }
+        run = None;
         // a marker after a lazy line starts the next item of the list above
         let lazy = lazy_stray.take().is_some_and(|lazy| {
             end_stray_line(text);
@@ -98,6 +102,7 @@ fn write_stray<H: MDHost>(
     node: &NodeRef,
     prev: Option<End>,
     cell: bool,
+    run: &mut Option<InlineWriter>,
 ) -> bool {
     let mark = text.len();
     // the item's line ends before the stray content
@@ -108,7 +113,7 @@ fn write_stray<H: MDHost>(
     let mut opts = FormatOpts::new().include_node();
     opts.table_cell = cell;
     let at = text.len();
-    h.write(text, node.id, opts);
+    h.write_continuing(text, node.id, opts, run);
     let wrote = text.len() != at;
     if !wrote {
         text.truncate(mark);
@@ -288,6 +293,8 @@ impl Item {
         }
         // the inline children whose text is in `buf`; a `<p>` in one makes it a paragraph
         let mut wrote = Vec::new();
+        // the inline text one inline child leaves open, for the next
+        let mut run = None;
         let mut next = li.first_child();
         while let Some(c) = next {
             next = next_child(li, &c, false);
@@ -300,7 +307,7 @@ impl Item {
             }
             if !node_is_block(&c) {
                 let (opts, mark) = (opts.offset(item.list_offset(false)), buf.len());
-                h.write(buf, c.id, opts);
+                h.write_continuing(buf, c.id, opts, &mut run);
                 // a child that wrote no text shows none in a `<p>`; an emphasis run that
                 // joins the one before rewrites the text before `mark`
                 if buf.get(mark..).is_none_or(|w| !w.trim_ascii().is_empty()) {
@@ -311,6 +318,7 @@ impl Item {
             let may_para = para_break(buf, cell);
             item.push(buf, || may_para && wrote.iter().any(has_para), false);
             wrote.clear();
+            run = None;
             let is_list = node_is_list(&c);
             if c.has_name("hr") {
                 // a cell has no line for a rule; the blocks around it stay apart

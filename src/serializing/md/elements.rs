@@ -4,6 +4,7 @@ use crate::{Element, NodeId};
 
 use super::ctx::FormatOpts;
 use super::host::MDHost;
+use super::inline::InlineWriter;
 
 pub(super) mod code;
 pub(super) mod emphasis;
@@ -16,7 +17,7 @@ pub(super) mod table;
 
 pub(super) fn write_element<H: MDHost>(
     h: &H,
-    text: &mut String,
+    out: &mut InlineWriter,
     e: &Element,
     id: NodeId,
     opts: FormatOpts,
@@ -25,25 +26,25 @@ pub(super) fn write_element<H: MDHost>(
         // their markers cannot go in link text; their children are
         // written as plain blocks
         local_name!("ol") | local_name!("ul") if !opts.link_body => {
-            list::write(h, text, e, id, opts);
+            out.write_block(|text| list::write(h, text, e, id, opts));
         }
         // a cell holds no `>` lines: its quote is written as a plain block
         local_name!("blockquote") if !opts.link_body && !opts.table_cell => {
-            quote::write(h, text, e, id, opts);
+            out.write_block(|text| quote::write(h, text, e, id, opts));
         }
         local_name!("table") if !opts.link_body => {
-            table::write(h, text, e, id, opts);
+            out.write_block(|text| table::write(h, text, e, id, opts));
         }
         local_name!("input") if opts.list_item && !opts.link_body && !opts.table_cell => {
-            list::write_task_marker(h, text, e, id);
+            out.write_block(|text| list::write_task_marker(h, text, e, id));
         }
         // no href: the contents are written in place, like any inline element
         local_name!("a") => match e.attr_ref(local_name!("href")) {
-            Some(href) => link::write(h, text, e, id, href, opts),
+            Some(href) => link::write(h, out, e, id, href, opts),
             None => return false,
         },
-        local_name!("img") => image::write(h, text, e, id, opts),
-        local_name!("pre") | local_name!("code") => code::write(h, text, e, id, opts),
+        local_name!("img") => image::write(h, out, e, id, opts),
+        local_name!("pre") | local_name!("code") => code::write(h, out, e, id, opts),
         local_name!("strong")
         | local_name!("b")
         | local_name!("em")
@@ -51,7 +52,7 @@ pub(super) fn write_element<H: MDHost>(
         | local_name!("del")
         | local_name!("s")
         | local_name!("strike") => {
-            emphasis::write(h, text, e, id, opts);
+            emphasis::write(h, out, e, id, opts);
         }
         local_name!("h1")
         | local_name!("h2")
@@ -61,7 +62,7 @@ pub(super) fn write_element<H: MDHost>(
         | local_name!("h6")
             if !opts.link_body =>
         {
-            heading::write(h, text, e, id, opts);
+            out.write_block(|text| heading::write(h, text, e, id, opts));
         }
         _ => return false,
     }

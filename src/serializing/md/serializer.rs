@@ -11,12 +11,12 @@ use super::block::{is_link_block, is_list, is_md_block, is_spaced_inline};
 use super::constants::{DEFAULT_SKIP_TAGS, MAX_NESTING};
 use super::ctx::FormatOpts;
 use super::elements;
-use super::elements::table::{add_cell_block_break, ends_with_cell_break};
+use super::elements::table::add_cell_block_break;
 use super::heading::md_prefix;
 use super::host::MDHost;
+use super::inline::{Inline, InlineWriter};
 use super::text_utils::{
-    add_linebreaks, double_linebreak, linebreak, push_block_space, push_normalized_text,
-    trim_space, trim_trailing_space,
+    add_linebreaks, double_linebreak, linebreak, push_block_space, trim_space, trim_trailing_space,
 };
 
 pub struct MDSerializer<'a> {
@@ -27,8 +27,6 @@ pub struct MDSerializer<'a> {
     depth: Cell<usize>,
     // at most one per nesting level, freed with the serializer
     bufs: RefCell<Vec<String>>,
-    /// A word boundary left at the end of a write, for the write that follows it.
-    word_space: Cell<bool>,
 }
 
 impl<'a> MDSerializer<'a> {
@@ -42,7 +40,6 @@ impl<'a> MDSerializer<'a> {
             last_list: Cell::new(None),
             depth: Cell::new(0),
             bufs: RefCell::default(),
-            word_space: Cell::new(false),
         }
     }
 
@@ -58,11 +55,10 @@ impl<'a> MDSerializer<'a> {
 
     fn write_element(
         &self,
-        text: &mut String,
+        out: &mut InlineWriter,
         e: &Element,
         id: NodeId,
         opts: FormatOpts,
-        space: &mut PendingSpace,
     ) -> bool {
         let depth = self.depth.get();
         // these handlers never dispatch to other handlers, so they add one frame at most
@@ -74,20 +70,8 @@ impl<'a> MDSerializer<'a> {
             return false;
         }
         self.depth.set(depth + 1);
-        let at = text.len();
-        let spaced = std::mem::take(&mut space.0);
-        if spaced {
-            PendingSpace::push(text, None, opts);
-        }
-        let start = text.len();
-        let handled = elements::write_element(self, text, e, id, opts);
+        let handled = elements::write_element(self, out, e, id, opts);
         self.depth.set(depth);
-        // an element that writes nothing leaves the space pending
-        if text.len() == start {
-            text.truncate(at);
-            space.0 = spaced;
-        }
-        space.0 |= self.word_space.take();
         handled
     }
 
@@ -119,40 +103,12 @@ impl<'a> MDSerializer<'a> {
     }
 }
 
-/// A word boundary written as a space only before the next text that starts a word;
-/// one still pending when a code write ends is dropped, otherwise the next write gets it.
-pub(super) struct PendingSpace(bool);
-
-impl PendingSpace {
-    /// Marks a boundary at `name`: a block in code (md skipped), an option or svg elsewhere.
-    fn mark_at(&mut self, name: &QualName, opts: FormatOpts) {
-        self.0 |= if opts.skip_md {
-            is_link_block(name)
-        } else {
-            is_spaced_inline(name)
-        };
-    }
-
-    pub(super) fn flush(&mut self, text: &mut String, next: &str, opts: FormatOpts) {
-        if next.is_empty() || !std::mem::take(&mut self.0) {
-            return;
-        }
-        Self::push(text, next.chars().next(), opts);
-    }
-
-    /// No space before whitespace or closing punctuation, or after an opening bracket or a `<br>`
-    /// tag (code writes none, text escapes its `<`). `next` is unknown before an element,
-    /// so one starting with punctuation still gets the space.
-    fn push(text: &mut String, next: Option<char>, opts: FormatOpts) {
-        let closing = |c: char| {
-            c.is_whitespace() || matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}')
-        };
-        let opening = |c: char| c.is_whitespace() || matches!(c, '(' | '[' | '{');
-        let br = !opts.skip_md && ends_with_cell_break(text);
-        if next.is_some_and(closing) || text.ends_with(opening) || br {
-            return;
-        }
-        push_block_space(text);
+/// A boundary that keeps words apart: a block in code (md skipped), an option or svg elsewhere.
+fn is_separator(name: &QualName, opts: FormatOpts) -> bool {
+    if opts.skip_md {
+        is_link_block(name)
+    } else {
+        is_spaced_inline(name)
     }
 }
 
@@ -195,13 +151,11 @@ impl MDHost for MDSerializer<'_> {
         self.last_list.set(Some((list, !alt_marker)));
     }
 
-    fn write(&self, text: &mut String, root_id: NodeId, opts: FormatOpts) {
+    fn write_inline(&self, out: &mut InlineWriter, root_id: NodeId, opts: FormatOpts) {
         // a link label is single-line text: only its pipe escaping follows the cell
         // shortcut: a new cell layout rule reachable in a label must check link_body too
         let double_br = double_linebreak(opts.table_cell && !opts.link_body);
 
-        // code (md skipped) joins its blocks with a space; an option or svg is written apart
-        let mut block_space = PendingSpace(self.word_space.take());
         let mut ops = if opts.include_node {
             vec![SerializeOp::Open(root_id)]
         } else {
@@ -215,27 +169,25 @@ impl MDHost for MDSerializer<'_> {
                 SerializeOp::Open(id) => {
                     let node = &self.nodes[id.value()];
                     match &node.data {
-                        NodeData::Text { contents } => {
-                            block_space.flush(text, contents, opts);
-                            push_normalized_text(text, contents, opts);
-                        }
+                        NodeData::Text { contents } => out.push(Inline::Text(contents, opts)),
                         NodeData::Element(e) => {
                             if self.is_skipped(&e.name) {
                                 continue;
                             }
 
-                            // code (md skipped) joins its blocks with a space instead of linebreaks
-                            block_space.mark_at(&e.name, opts);
+                            if is_separator(&e.name, opts) {
+                                out.push(Inline::Separator);
+                            }
                             if !opts.skip_md {
-                                Self::open_block(text, &e.name, opts, double_br);
+                                Self::open_block(&mut out.text, &e.name, opts, double_br);
                                 // push md prefixes only when md mode is active
                                 if !opts.link_body {
                                     if let Some(prefix) = md_prefix(&e.name) {
-                                        text.push_str(prefix);
+                                        out.text.push_str(prefix);
                                     }
                                 }
                                 // delegate serialization if the element has its own custom handler
-                                if self.write_element(text, e, id, opts, &mut block_space) {
+                                if self.write_element(out, e, id, opts) {
                                     continue;
                                 }
                             }
@@ -249,18 +201,21 @@ impl MDHost for MDSerializer<'_> {
                     }
                 }
                 SerializeOp::Close(name) => {
-                    block_space.mark_at(name, opts);
-                    if !text.ends_with(double_br) {
-                        close_element(text, name, opts, &ops);
+                    if is_separator(name, opts) {
+                        out.push(Inline::Separator);
+                    }
+                    if !out.text.ends_with(double_br) {
+                        if let Some(line_break) = close_element(&mut out.text, name, opts, &ops) {
+                            out.push(Inline::LineBreak(line_break));
+                        }
                     }
                 }
             }
         }
 
         if !opts.include_node && !opts.link_body {
-            trim_space(text);
+            trim_space(&mut out.text);
         }
-        self.word_space.set(!opts.skip_md && block_space.0);
     }
 }
 
@@ -272,7 +227,13 @@ fn ends_with_hard_break(name: &QualName, text: &str, linebreak: &str) -> bool {
 }
 
 /// Ends an element written by `write`; `ops` holds the work still to do.
-fn close_element(text: &mut String, name: &QualName, opts: FormatOpts, ops: &[SerializeOp]) {
+/// Returns the line break to push after the text, if the element ends a line.
+fn close_element(
+    text: &mut String,
+    name: &QualName,
+    opts: FormatOpts,
+    ops: &[SerializeOp],
+) -> Option<&'static str> {
     let linebreak = linebreak(opts.table_cell);
     if opts.link_body && is_link_block(name) {
         // no joining space when nothing follows in the link body
@@ -291,18 +252,19 @@ fn close_element(text: &mut String, name: &QualName, opts: FormatOpts, ops: &[Se
             local_name!("br") | local_name!("li") | local_name!("tr") | local_name!("caption")
         ) {
             if ends_with_hard_break(name, text, linebreak) {
-                return;
+                return None;
             }
             trim_trailing_space(text);
-            if opts.link_body {
+            return Some(if opts.link_body {
                 // a hard break can leave a blank line inside `[...]`
-                text.push_str("<br>");
-            } else {
+                "<br>"
+            } else if opts.table_cell {
                 // normalize `<br>` as linebreak
                 // fallback for `li`, `tr` and `caption` elements outside their standard context
-                text.push_str("  ");
-                text.push_str(linebreak);
-            }
+                "  <br>"
+            } else {
+                "  \n"
+            });
         } else if matches!(name.local, local_name!("td") | local_name!("th")) {
             // a table written as text keeps its cells apart
             push_block_space(text);
@@ -311,6 +273,7 @@ fn close_element(text: &mut String, name: &QualName, opts: FormatOpts, ops: &[Se
         // normalize `<br>` as a space when Markdown output is disabled
         text.push(' ');
     }
+    None
 }
 
 /// Ends a block: a blank line, or a `<br>` inside a table cell.

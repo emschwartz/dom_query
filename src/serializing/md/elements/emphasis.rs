@@ -8,6 +8,7 @@ use crate::{Element, NodeId, NodeRef};
 use super::super::block::{is_block_wrapper, is_link_block, is_md_block};
 use super::super::ctx::{EmphasisScope, FormatOpts};
 use super::super::host::MDHost;
+use super::super::inline::{Inline, InlineWriter};
 use super::super::serializer::add_block_end;
 use super::super::text_iter::Paragraphs;
 use super::super::text_utils::{escape_trailing_bang, trim_trailing_space};
@@ -15,7 +16,7 @@ use super::image::image_src;
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    text: &mut String,
+    out: &mut InlineWriter,
     el: &Element,
     id: NodeId,
     opts: FormatOpts,
@@ -26,16 +27,27 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 
     let cur_scope = EmphasisScope::from(emphasis);
     let em_opts = opts.include_node().inline().emphasis_scope(cur_scope);
-    let mut emphasis_text = h.scratch();
+    let mut run = InlineWriter::new(h.take_buf());
+    h.write_children(&mut run, id, em_opts);
+    let mut write_markup = |text: &mut String, emphasis_text: &mut String| {
+        push_runs(h, text, emphasis_text, id, emphasis, opts);
+    };
+    out.push(Inline::Emphasis(&mut run, &mut write_markup));
+    h.put_buf(run.text);
+}
 
-    h.write_children(&mut emphasis_text, id, em_opts);
-
-    if emphasis_text.is_empty() {
-        return;
-    }
-
+/// Writes `emphasis_text` as one or more runs of `emphasis`, chosen from the text before it.
+fn push_runs<H: MDHost>(
+    h: &H,
+    text: &mut String,
+    emphasis_text: &mut String,
+    id: NodeId,
+    emphasis: &str,
+    opts: FormatOpts,
+) {
+    let cur_scope = EmphasisScope::from(emphasis);
     if opts.emphasis_scope.contains(cur_scope) {
-        push_emphasis(text, &mut emphasis_text, "");
+        push_emphasis(text, emphasis_text, "");
         return;
     }
     // a hard break at the start goes before the run, written as a bare `<br>` would be,
@@ -56,7 +68,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         && holds_only_paragraphs(h, id)
     {
         let mut part_buf = h.scratch();
-        let mut parts = Paragraphs::new(&emphasis_text).peekable();
+        let mut parts = Paragraphs::new(emphasis_text).peekable();
         while let Some(part) = parts.next() {
             let last = parts.peek().is_none();
             // a hard break before the blank line is dropped, not left inside the run
@@ -74,7 +86,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         }
         return;
     }
-    push_run(h, text, &mut emphasis_text, id, emphasis, true, opts.offset);
+    push_run(h, text, emphasis_text, id, emphasis, true, opts.offset);
 }
 
 /// Writes `content` as an emphasis run, or as html when its delimiters can't open

@@ -7,6 +7,7 @@ use crate::node::{TreeNode, child_nodes};
 use crate::{NodeId, Tree};
 
 use super::ctx::FormatOpts;
+use super::inline::InlineWriter;
 
 /// A scratch buffer that returns to the host's pool when dropped.
 pub(super) struct ScratchBuf<'h, H: MDHost> {
@@ -56,13 +57,42 @@ pub(super) trait MDHost: Sized {
     fn set_last_list(&self, list: NodeId, alt_marker: bool);
 
     /// Writes `id` when `opts.include_node`, otherwise its children; trims unless included.
-    fn write(&self, out: &mut String, id: NodeId, opts: FormatOpts);
+    fn write_inline(&self, out: &mut InlineWriter, id: NodeId, opts: FormatOpts);
+
+    /// Like `write_inline`, into block text: a separator left at either end is dropped.
+    fn write(&self, out: &mut String, id: NodeId, opts: FormatOpts) {
+        let mut inline = InlineWriter::new(std::mem::take(out));
+        self.write_inline(&mut inline, id, opts);
+        *out = inline.text;
+    }
+
+    /// Like `write`, continuing `run`, the inline text an earlier write left in `out`,
+    /// if nothing changed `out` since; then leaves this one's there.
+    fn write_continuing(
+        &self,
+        out: &mut String,
+        id: NodeId,
+        opts: FormatOpts,
+        run: &mut Option<InlineWriter>,
+    ) {
+        let text = std::mem::take(out);
+        let mut inline = match run.take() {
+            Some(mut run) => {
+                run.text = text;
+                run
+            }
+            None => InlineWriter::new(text),
+        };
+        self.write_inline(&mut inline, id, opts);
+        *out = std::mem::take(&mut inline.text);
+        *run = Some(inline);
+    }
 
     /// Writes each child in document order, without trimming.
-    fn write_children(&self, out: &mut String, id: NodeId, opts: FormatOpts) {
+    fn write_children(&self, out: &mut InlineWriter, id: NodeId, opts: FormatOpts) {
         let nodes = self.nodes();
         for child in child_nodes(nodes, &id, false) {
-            self.write(out, child, opts);
+            self.write_inline(out, child, opts);
         }
     }
 }

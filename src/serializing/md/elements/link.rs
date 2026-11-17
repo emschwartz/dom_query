@@ -4,15 +4,14 @@ use crate::{Element, NodeId, NodeRef};
 
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
+use super::super::inline::{Inline, InlineWriter};
 use super::super::serializer::add_block_end;
-use super::super::text_utils::{
-    escape_trailing_bang, push_block_space, push_md_url, push_normalized_text, push_title,
-};
+use super::super::text_utils::push_block_space;
 use super::list::node_is_block;
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
-    text: &mut String,
+    out: &mut InlineWriter,
     el: &Element,
     id: NodeId,
     href: &str,
@@ -20,42 +19,34 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
 ) {
     let default_opts = FormatOpts::new();
 
-    let mut link_text = h.scratch();
+    let mut label = InlineWriter::new(h.take_buf());
     // the label keeps the cell rules, so a code span in it still escapes its pipes
     let mut label_opts = default_opts.link_body();
     label_opts.table_cell = opts.table_cell;
-    h.write(&mut link_text, id, label_opts);
+    h.write_inline(&mut label, id, label_opts);
 
     // a link with only whitespace to show still separates the words around it
-    if link_text.trim_ascii().is_empty() {
-        if !link_text.is_empty() {
-            push_normalized_text(text, &link_text, default_opts);
-        }
-        return;
+    if label.text.trim_ascii().is_empty() {
+        let space = std::mem::take(&mut label.text);
+        out.push(Inline::Text(&space, default_opts));
+        out.push(Inline::Link(&mut label, href, None));
+        h.put_buf(label.text);
+        return h.put_buf(space);
     }
 
     // text before the link must not join the paragraph its first block starts
     let node = NodeRef::new(id, h.tree());
     if starts_with_block(&node) {
-        push_block_sep(text, opts);
+        out.write_block(|text| push_block_sep(text, opts));
     }
 
-    // an unescaped trailing `!` would turn `[x](u)` into image syntax
-    escape_trailing_bang(text);
-    text.push('[');
-    text.push_str(&link_text);
-    text.push_str("](");
-    push_md_url(text, href);
-
-    if let Some(title) = el.attr_ref(local_name!("title")) {
-        push_title(text, title);
-    }
-
-    text.push(')');
+    let title = el.attr_ref(local_name!("title"));
+    out.push(Inline::Link(&mut label, href, title));
+    h.put_buf(label.text);
 
     // text after the link must not join the paragraph its last block ended
     if ends_with_block(&node) {
-        push_block_sep(text, opts);
+        out.write_block(|text| push_block_sep(text, opts));
     }
 }
 

@@ -5,28 +5,31 @@ use crate::{Element, NodeId};
 
 use super::super::ctx::FormatOpts;
 use super::super::host::MDHost;
+use super::super::inline::{Inline, InlineWriter};
 use super::super::text_utils::{push_md_url, push_normalized_text, push_title};
 
 pub(in crate::serializing::md) fn write<H: MDHost>(
-    _h: &H,
-    text: &mut String,
+    h: &H,
+    out: &mut InlineWriter,
     el: &Element,
     _id: NodeId,
     _opts: FormatOpts,
 ) {
     if let Some(src) = image_src(el) {
+        let mut text = h.scratch();
         text.push_str("![");
 
         if let Some(alt) = el.attr_ref(local_name!("alt")) {
-            push_normalized_text(text, alt, FormatOpts::new());
+            push_normalized_text(&mut text, alt, FormatOpts::new());
         }
         text.push(']');
         text.push('(');
-        push_md_url(text, &src);
+        push_md_url(&mut text, &src);
         if let Some(title) = el.attr_ref(local_name!("title")) {
-            push_title(text, title);
+            push_title(&mut text, title);
         }
         text.push(')');
+        out.push(Inline::Image(&text));
     }
 }
 

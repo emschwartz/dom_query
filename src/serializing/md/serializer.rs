@@ -91,7 +91,7 @@ fn open_block(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
         // a `---` line could underline the text above it in an item; a cell has no line for
         // a rule in an item
         if name.local == local_name!("hr") && !opts.table_cell {
-            out.push_block(Block::Rule, if opts.list_item { "***" } else { "---" });
+            out.push_block(Block::Rule, if out.in_item() { "***" } else { "---" });
         } else if name.local == local_name!("hr") && !opts.list_item {
             out.push_raw("---");
         }

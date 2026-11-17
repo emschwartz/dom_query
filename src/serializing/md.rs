@@ -731,6 +731,11 @@ $ cd hello
         );
         // after a lazy line, the marker starts the list's next item
         html_2md_compare("<ul><li>x</li>a<li></li></ul>", "- x\na\n-");
+        // a blank line the item still owes keeps the text out of it
+        html_2md_compare(
+            "<ul><li><div>a</div></li><em>b</em><li></li></ul>",
+            "- a\n\n*b*\n\n-",
+        );
         // its hard breaks end only its line; with a second one they end its paragraph
         html_2md_compare("<ul><li>a</li>x<br><li>b</li></ul>", "- a\nx\n- b");
         html_2md_compare("<ul><li>a</li>x<br><br><li>b</li></ul>", "- a\nx\n\n- b");
@@ -1330,6 +1335,11 @@ Another Paragraph";
             "<ul><li><table><tr><td>b</td></tr><tr><td>c</td><td>d</td></tr></table></li><li>x</li></ul>",
             "- b  \n  c d\n- x",
         );
+        // its rule is still `***`, which can't underline the text above it
+        html_2md_compare(
+            "<ul><li><table><tr><td>a<hr></td></tr><tr><td>b</td><td>c</td></tr></table></li></ul>",
+            "- a\n  ***\n  b c",
+        );
     }
 
     #[test]
@@ -1427,6 +1437,8 @@ Another Paragraph";
         );
         // a leading hard break would leave the marker line empty
         html_2md_compare("<ul><li><br><br>a</li></ul>", "- a");
+        // trailing hard breaks leave no blank line, so the list stays tight
+        html_2md_compare("<ul><li>a<br><br></li><li>b</li></ul>", "- a\n- b");
         // a nested list in a table cell keeps its indent
         html_2md_compare(
             "<table><tr><th>h</th></tr><tr><td><ul><li>a<ul><li>b</li></ul></li></ul></td></tr></table>",
@@ -2263,6 +2275,8 @@ fn main() {
     #[test]
     fn test_pre_empty() {
         html_2md_compare("<pre><code></code></pre>", "```\n```");
+        // the parser drops the first newline; the second is an empty line
+        html_2md_compare("<pre>\n\n</pre>", "```\n\n```");
     }
 
     #[test]
@@ -2866,6 +2880,10 @@ R 2, *C 1* R 2, *C 2*";
             "<table><tr><th>H</th></tr><tr><td><br>a</td></tr></table>",
             "| H |\n| - |\n| <br>a |",
         );
+        html_2md_compare(
+            "<table><tr><th>H</th></tr><tr><td><br><ul><li>a</li></ul></td></tr></table>",
+            "| H |\n| - |\n| <br>+ a |",
+        );
         // a list item after inline text joins its block with one cell break
         html_2md_compare(
             "<table><tr><th>H</th></tr><tr><td><ul><li>a<p>b</p></li></ul></td></tr></table>",
@@ -2899,6 +2917,11 @@ R 2, *C 1* R 2, *C 2*";
         html_2md_compare(
             "<table><tr><th>H</th></tr><tr><td><code>x\ny</code></td></tr></table>",
             "| H |\n| - |\n| `x`<br>`y` |",
+        );
+        // a block after it takes one cell break
+        html_2md_compare(
+            "<table><tr><th>H</th></tr><tr><td><pre>p</pre><p>t</p></td></tr></table>",
+            "| H |\n| - |\n| `p`<br>t |",
         );
         // a lone CR set through the DOM API is a line ending in Markdown
         let doc = Document::from("<table><tr><th>H</th></tr><tr><td><pre></pre></td></tr></table>");
@@ -3597,11 +3620,11 @@ fn main() {
         html_2md_compare("<b><h1>x</h1></b>", "<strong>\n\n# x\n\n</strong>");
         html_2md_compare(
             "<ul><li><s><hr></s></li></ul>",
-            "- <del>\n\n  ***\n\n  </del>",
+            "- <del>\n\n  ---\n\n  </del>",
         );
         html_2md_compare(
             "<ul><li><b><hr></b></li></ul>",
-            "- <strong>\n\n  ***\n\n  </strong>",
+            "- <strong>\n\n  ---\n\n  </strong>",
         );
         // the space a block drops leaves its first word at a line start, escaped as one
         html_2md_compare("<i> <i>-</i><h1>h</h1></i>", "<em>\n\n\\-\n\n# h\n\n</em>");

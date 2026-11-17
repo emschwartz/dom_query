@@ -48,7 +48,9 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
                     } else {
                         Separator::LineBreak
                     });
-                    matches!(end, BlockEnd::Text | BlockEnd::Quote | BlockEnd::Lazy)
+                    // a blank line the item still owes (after a div, quote or list) ends it
+                    out.owed() == Separator::LineBreak
+                        && matches!(end, BlockEnd::Text | BlockEnd::Quote | BlockEnd::Lazy)
                 }
                 Preceding::Stray(end) => end == BlockEnd::Lazy,
                 Preceding::Nothing => false,

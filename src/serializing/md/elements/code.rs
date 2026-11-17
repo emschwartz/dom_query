@@ -83,14 +83,17 @@ fn write_pre<H: MDHost>(h: &H, out: &mut BlockWriter, id: NodeId, opts: FormatOp
     if opts.table_cell {
         out.owe(Separator::LineBreak);
         // a lone `\r` (possible via the DOM API) is a line ending too and would end the row
-        for line in content.lines().flat_map(|l| l.split('\r')) {
+        for (i, line) in content.lines().flat_map(|l| l.split('\r')).enumerate() {
+            if i > 0 {
+                out.push(Inline::HtmlBreak);
+            }
             span.clear();
             push_code_text(&mut span, line, true);
             if !span.is_empty() {
                 out.push(Inline::Code(&span));
             }
-            out.push(Inline::HtmlBreak);
         }
+        out.owe(Separator::LineBreak);
         return;
     }
 

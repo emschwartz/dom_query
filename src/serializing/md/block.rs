@@ -530,8 +530,9 @@ impl BlockWriter {
 
     /// Writes `block`, each of its `lines` on an output line of its own.
     pub(super) fn push_block(&mut self, block: Block, lines: &str) {
-        // a block that writes nothing leaves no trace, like an empty `<p>`
-        if lines.is_empty() {
+        // a block that writes nothing leaves no trace, like an empty `<p>`; a fence's one empty
+        // line is content
+        if lines.is_empty() && !matches!(block, Block::CodeFence) {
             return;
         }
         self.join_paragraphs();
@@ -598,6 +599,11 @@ impl BlockWriter {
             (LinePrefix::ListItem { .. }, false) => Some(frame.item_end),
             (LinePrefix::Quote, false) => Some(BlockEnd::Quote),
         };
+        // hard breaks at a container's end leave no blank line inside it
+        if self.paragraph.breaks() > 1 {
+            self.paragraph.take_breaks(&mut self.lines);
+            self.paragraph.hard_break(&mut self.lines, true);
+        }
         self.end_paragraph(true);
         let frame = self.frames.pop()?;
         self.lines.restore_prefix(frame.outer_prefix);
@@ -612,6 +618,11 @@ impl BlockWriter {
             self.set_last(end);
         }
         end
+    }
+
+    /// Whether the next block is a block of a list item.
+    pub(super) fn in_item(&self) -> bool {
+        self.frames.last().is_some_and(Frame::is_item)
     }
 
     /// The innermost list item, if the next block is one of its blocks.
@@ -785,10 +796,11 @@ impl BlockWriter {
     }
 
     /// A block drops the hard breaks owed, except that a single one before a line break still
-    /// ends its line (`  `), unless a `marker` starts the next.
+    /// ends its line (`  `), unless a `marker` starts the next outside a cell's first text.
     fn write_breaks_before(&mut self, sep: Separator, marker: bool) {
         let breaks = self.paragraph.take_breaks(&mut self.lines);
-        if sep == Separator::LineBreak && breaks == 1 && !marker {
+        let cell_start = self.opts.table_cell && self.lines.as_str().is_empty();
+        if sep == Separator::LineBreak && breaks == 1 && (!marker || cell_start) {
             self.paragraph.end_space(&mut self.lines, false);
             self.lines.push_str("  ");
         }

@@ -21,7 +21,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let row_nodes = table_ref.find(&["tr"]);
 
     let header_id = table_header_row(&row_nodes).map(|row| row.id);
-    if !is_table_node_writable(&table_ref, &row_nodes, header_id) {
+    if !is_table_node_writable(&row_nodes, header_id) {
         write_as_text(h, out, id, opts);
         return;
     }
@@ -122,15 +122,7 @@ pub(in crate::serializing::md) fn ends_with_cell_break(text: &str) -> bool {
         .is_some_and(|rest| (rest.len() - rest.trim_end_matches('\\').len()) % 2 == 0)
 }
 
-fn is_table_node_writable(
-    table_node: &NodeRef,
-    rows: &[NodeRef],
-    header_id: Option<NodeId>,
-) -> bool {
-    if has_nested_table(table_node) {
-        // if table has inline table then ignore this table
-        return false;
-    }
+fn is_table_node_writable(rows: &[NodeRef], header_id: Option<NodeId>) -> bool {
     let mut common_cell_count: usize = 0;
     for row in rows {
         if header_id == Some(row.id) {

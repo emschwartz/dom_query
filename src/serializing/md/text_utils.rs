@@ -3,8 +3,8 @@ use std::borrow::Cow;
 
 use super::ctx::FormatOpts;
 
-#[allow(clippy::cast_possible_truncation)]
 /// Pushes the words of `new_text`, escaped; `line` is where the last line of `text` starts.
+#[allow(clippy::cast_possible_truncation)]
 pub(super) fn push_normalized_text(
     text: &mut String,
     line: usize,

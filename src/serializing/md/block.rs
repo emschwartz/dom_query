@@ -100,7 +100,7 @@ impl Separator {
     }
 }
 
-/// A block written as lines of its own, named for what it is.
+/// A leaf block, written as lines of its own by `BlockWriter::push_block`.
 #[derive(Clone, Copy)]
 pub(super) enum Block {
     /// lines of text, such as a caption
@@ -187,6 +187,15 @@ fn item_gap(prev: BlockEnd, next: BlockStart) -> Separator {
     }
 }
 
+/// The separator the lists around require, and how they see the content (`list_gap`).
+struct ListGap {
+    sep: Separator,
+    /// how the block before ended, when `block_gap` decided `sep`
+    prev: Option<BlockEnd>,
+    /// how the block the content opens starts
+    start: BlockStart,
+}
+
 /// What precedes a list item in its list.
 #[derive(Clone, Copy)]
 pub(super) enum Preceding {
@@ -197,9 +206,8 @@ pub(super) enum Preceding {
     Stray(BlockEnd),
 }
 
-/// `CommonMark`'s container blocks (block quote, list item): open while their child blocks are
-/// written, unlike a leaf block, which `push_block` writes at once. Each prefixes every line
-/// inside.
+/// `CommonMark`'s container blocks (block quote, list item), open while their child blocks are
+/// written: each prefixes every line inside. A leaf block is a `Block`, written at once.
 pub(super) enum LinePrefix {
     /// Each line starts with `> `.
     Quote,
@@ -250,6 +258,8 @@ struct Frame {
     prefix: LinePrefix,
     /// its first line, with its marker, is still to be written
     marker_due: bool,
+    /// the prefix to restore on close; re-taken at the marker line, once the outer frames due
+    /// have added their parts
     outer_prefix: PrefixMark,
     /// list item: how its last block ended
     item_end: BlockEnd,
@@ -271,15 +281,19 @@ pub(super) struct BlockWriter {
     lines: Lines,
     paragraph: InlineWriter,
     opts: FormatOpts,
+    /// The separator owed before the next content, written only once content follows.
     owed: Separator,
     /// A `<p>` opened and nothing written in it yet.
     paragraph_opened: bool,
-    /// Whether the last line holds content.
+    /// Content may continue the current line without a line break first.
     line_open: bool,
     frames: Vec<Frame>,
     /// The separator owed is written as it is, past the gap rules of the lists around.
     owed_exactly: bool,
+    /// Counts the separators settled before content; only `starts_content` reads it.
     content_starts: usize,
+    /// Something past one inline run was written: a block, a line break, a marker or a
+    /// paragraph kept apart.
     wrote_block: bool,
     /// The separator owed before the first content, which a fragment leaves to its parent.
     lead: Separator,
@@ -517,7 +531,7 @@ impl BlockWriter {
     pub(super) fn close_paragraph(&mut self) {
         if !std::mem::take(&mut self.paragraph_opened) {
             self.end_paragraph(true);
-            self.set_last(BlockEnd::Para);
+            self.set_item_end(BlockEnd::Para);
         }
         self.owe(Separator::BlankLine);
     }
@@ -546,7 +560,7 @@ impl BlockWriter {
             // its spaces are content
             self.lines.mark_line_start();
             self.paragraph.end_paragraph();
-            self.set_last(end);
+            self.set_item_end(end);
         }
         // the lines after the first are not blocks of their own: they only break the line
         let mut last = None;
@@ -561,7 +575,7 @@ impl BlockWriter {
                 self.owed = Separator::None;
                 self.lines.mark_line_start();
                 self.paragraph.end_paragraph();
-                self.set_last(end);
+                self.set_item_end(end);
             }
             None => {}
         }
@@ -624,7 +638,7 @@ impl BlockWriter {
                 _ if nested => BlockEnd::Lazy,
                 end => end,
             };
-            self.set_last(end);
+            self.set_item_end(end);
         }
         end
     }
@@ -639,7 +653,7 @@ impl BlockWriter {
         self.frames.last_mut().filter(|f| f.is_item())
     }
 
-    fn set_last(&mut self, end: BlockEnd) {
+    fn set_item_end(&mut self, end: BlockEnd) {
         if let Some(item) = self.item() {
             item.item_end = end;
         }
@@ -653,9 +667,8 @@ impl BlockWriter {
         self.paragraph.end_paragraph();
     }
 
-    /// Writes what content starting as `start` needs before it: the separator owed and a
-    /// new line's prefix, with the markers of the items it starts. `head` is its first line if
-    /// known: inline content starts with text that makes no rule.
+    /// Writes what content starting as `start` needs first: the separator owed, a new line's
+    /// prefix and the markers of the items it starts; `head` is its first line, `None` inline.
     fn start_content(&mut self, start: BlockStart, head: Option<&str>) {
         if self.starts_content_line() {
             self.start_block(start, head);
@@ -685,7 +698,7 @@ impl BlockWriter {
         if !self.line_open || marker_due {
             self.start_line(head);
         }
-        self.set_last(if para { BlockEnd::Para } else { BlockEnd::Text });
+        self.set_item_end(if para { BlockEnd::Para } else { BlockEnd::Text });
     }
 
     fn write_separator(&mut self, start: BlockStart, head: Option<&str>) -> Separator {
@@ -693,25 +706,36 @@ impl BlockWriter {
         // the first frame whose first line this content starts
         let i = self.frames.iter().position(|f| f.marker_due);
         let marker = i.is_some_and(|i| self.frames.get(i).is_some_and(Frame::is_item));
-        let (mut sep, prev, here) =
-            if std::mem::take(&mut self.owed_exactly) || self.frames.is_empty() {
-                (owed, None, start)
-            } else {
-                self.list_gap(i.unwrap_or(self.frames.len()), owed, start, head)
-            };
+        // the lists around decide the separator, unless it is owed exactly
+        let gap = if std::mem::take(&mut self.owed_exactly) || self.frames.is_empty() {
+            ListGap {
+                sep: owed,
+                prev: None,
+                start,
+            }
+        } else {
+            self.list_gap(i.unwrap_or(self.frames.len()), owed, start, head)
+        };
+        let mut sep = gap.sep;
+        // a paragraph kept apart ends here instead
         if sep >= Separator::LineBreak && self.paragraphs.is_some() {
             return self.next_paragraph(sep, start);
         }
         // an empty `>` line ends a quote's paragraph without the blank line
-        if prev == Some(BlockEnd::Quote) && here == BlockStart::Text && !self.opts.table_cell {
+        if gap.prev == Some(BlockEnd::Quote)
+            && gap.start == BlockStart::Text
+            && !self.opts.table_cell
+        {
             sep = Separator::LineBreak;
             self.lines.new_line();
             self.lines.push('>');
         }
+        // hard breaks owed raise or replace it, and a line break drops them
         sep = self.breaks_before(sep, false);
         if sep >= Separator::LineBreak {
             self.write_breaks_before(sep, marker);
         }
+        // a fragment leaves the separator before its first content to its parent
         if self.lines.as_str().is_empty() {
             self.lead = self.lead.max(sep);
             sep = Separator::None;
@@ -752,15 +776,14 @@ impl BlockWriter {
     }
 
     /// The separator the lists around require before content starting as `start` (`head` its
-    /// first line), `owed` otherwise; with how the block before it ended and how it starts.
-    /// Frame `i` is the first whose marker line the content starts.
+    /// first line), else `owed`; frame `i` is the first whose marker line the content starts.
     fn list_gap(
         &self,
         i: usize,
         owed: Separator,
         start: BlockStart,
         head: Option<&str>,
-    ) -> (Separator, Option<BlockEnd>, BlockStart) {
+    ) -> ListGap {
         // how the block starting at frame `j` starts: a quote's or item's own start, else the content's
         let block_start = |j: usize| match self.frames.get(j).map(|f| &f.prefix) {
             Some(LinePrefix::Quote) => BlockStart::Quote,
@@ -768,7 +791,8 @@ impl BlockWriter {
             Some(LinePrefix::ListItem { .. }) => BlockStart::List,
             _ => start,
         };
-        let (here, first) = (block_start(i), block_start(i + 1));
+        // the block the content opens in frame `i`'s parent, and the first block inside frame `i`
+        let (new_block, first_block) = (block_start(i), block_start(i + 1));
         let enclosing = i.checked_sub(1).and_then(|j| self.frames.get(j));
         let (sep, prev) = match (self.frames.get(i).map(|f| &f.prefix), enclosing) {
             (
@@ -777,18 +801,20 @@ impl BlockWriter {
                     ..
                 }),
                 _,
-            ) => (item_gap(*end, first), None),
+            ) => (item_gap(*end, first_block), None),
             (
                 Some(LinePrefix::ListItem {
                     preceding: Preceding::Stray(end),
                     ..
                 }),
                 _,
-            ) => (owed.max(block_gap(*end, here)), Some(*end)),
+            ) => (owed.max(block_gap(*end, new_block)), Some(*end)),
+            // the content is a new block of the enclosing item, after a line break or opening a
+            // quote or list in it; text that continues the item's line keeps what is owed
             (_, Some(outer))
                 if outer.is_item() && (owed >= Separator::LineBreak || i < self.frames.len()) =>
             {
-                (block_gap(outer.item_end, here), Some(outer.item_end))
+                (block_gap(outer.item_end, new_block), Some(outer.item_end))
             }
             _ => (owed, None),
         };
@@ -798,12 +824,15 @@ impl BlockWriter {
         } else {
             sep
         };
-        (sep, prev, here)
+        ListGap {
+            sep,
+            prev,
+            start: new_block,
+        }
     }
 
-    /// What the hard breaks owed make of the separator owed before the next content: two or
-    /// more (`run_break` counts one at a run's start) end the paragraph, one replaces a space.
-    /// Before a cell's first text they are content, written as they are.
+    /// What the hard breaks owed (`run_break`: one more at a run's start) make of `sep`: two end
+    /// the paragraph, one replaces a space; before a cell's first text they are kept as content.
     fn breaks_before(&self, sep: Separator, run_break: bool) -> Separator {
         let breaks = self.paragraph.breaks() + usize::from(run_break);
         if breaks == 0 || (self.opts.table_cell && self.lines.as_str().is_empty()) {
@@ -878,7 +907,7 @@ impl BlockWriter {
         for i in first..last {
             self.wrote_block = true;
             // an item whose first line holds a nested item keeps its nested lists at its
-            // content column
+            // content column: this marks the outer frame, for `item_indent` on later lines
             if i > first && self.frames.get(i).is_some_and(Frame::is_item) {
                 if let Some(outer) = self.frames.get_mut(i - 1) {
                     outer.starts_with_list |= outer.is_item();

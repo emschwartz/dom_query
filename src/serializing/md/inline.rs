@@ -67,7 +67,7 @@ enum LastWritten {
     },
 }
 
-/// One piece of inline output, named for what it is.
+/// One piece of inline output; `InlineWriter::push` writes it.
 pub(super) enum Inline<'a> {
     Text(&'a str, FormatOpts),
     /// An `<svg>` or `<option>`: shows nothing, keeps words apart.
@@ -347,40 +347,7 @@ impl InlineWriter {
     fn push_emphasis(&mut self, out: &mut Lines, kind: Emphasis, content: &str, first: char) {
         // whitespace alone takes no delimiters
         if content.trim().is_empty() {
-            if content.contains('\n') {
-                // hard breaks, between the no-break spaces around them; each `  ` before a
-                // `\n` is a break's marker, but spaces after the last one are content
-                let mut lines = content.split('\n');
-                let last = lines.next_back().unwrap_or_default();
-                for line in lines.map(|l| l.trim_end_matches(' ')) {
-                    if !line.trim_ascii().is_empty() {
-                        self.push_emphasis(out, kind, line, first);
-                    }
-                    self.hard_break(out, true);
-                }
-                if !last.trim_ascii().is_empty() {
-                    self.push_emphasis(out, kind, last, first);
-                }
-            } else if let Some(run) = self.pending_run.as_mut().filter(|run| !run.breaks) {
-                // after a run's hard break, it would come before the break
-                run.trail.push_str(content);
-            } else if content.bytes().all(|b| b == b' ') {
-                self.ending_space |=
-                    !self.at_line_start(out) && !out.as_str().ends_with(['\n', ' ']);
-            } else {
-                // spaces show nothing at a line start; a no-break space is content
-                let content = if self.at_line_start(out) {
-                    content.trim_start_matches(' ')
-                } else {
-                    content
-                };
-                self.start_piece(out, first, content.chars().next());
-                out.push_str(content);
-                if let Some(c) = content.chars().next_back() {
-                    self.written = LastWritten::Char(c);
-                }
-            }
-            return;
+            return self.push_blank_emphasis(out, kind, content, first);
         }
         let edges = Edges::of(content);
         // a hard break at the start goes before the run
@@ -416,6 +383,42 @@ impl InlineWriter {
         }
         let content = std::mem::take(&mut self.spare);
         self.pending_run = Some(EmphasisRun::new(kind, content, self.written, &edges));
+    }
+
+    /// Writes a run of only whitespace, which takes no delimiters: its hard breaks and spaces.
+    fn push_blank_emphasis(&mut self, out: &mut Lines, kind: Emphasis, content: &str, first: char) {
+        if content.contains('\n') {
+            // hard breaks, between the no-break spaces around them; each `  ` before a
+            // `\n` is a break's marker, but spaces after the last one are content
+            let mut lines = content.split('\n');
+            let last = lines.next_back().unwrap_or_default();
+            for line in lines.map(|l| l.trim_end_matches(' ')) {
+                if !line.trim_ascii().is_empty() {
+                    self.push_emphasis(out, kind, line, first);
+                }
+                self.hard_break(out, true);
+            }
+            if !last.trim_ascii().is_empty() {
+                self.push_emphasis(out, kind, last, first);
+            }
+        } else if let Some(run) = self.pending_run.as_mut().filter(|run| !run.breaks) {
+            // after a run's hard break, it would come before the break
+            run.trail.push_str(content);
+        } else if content.bytes().all(|b| b == b' ') {
+            self.ending_space |= !self.at_line_start(out) && !out.as_str().ends_with(['\n', ' ']);
+        } else {
+            // spaces show nothing at a line start; a no-break space is content
+            let content = if self.at_line_start(out) {
+                content.trim_start_matches(' ')
+            } else {
+                content
+            };
+            self.start_piece(out, first, content.chars().next());
+            out.push_str(content);
+            if let Some(c) = content.chars().next_back() {
+                self.written = LastWritten::Char(c);
+            }
+        }
     }
 
     /// Writes the pending run, with delimiters if they fit before `after`, else as html.

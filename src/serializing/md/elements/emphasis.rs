@@ -56,9 +56,8 @@ impl Emphasis {
         }
     }
 
-    /// Whether delimiters fit around `content` between the source characters `before` and
-    /// `after` (`None` is a line edge or markup), looking past nested delimiters at its edges.
-    /// `joined`: the opening delimiter extends a closing delimiter run written right before it.
+    /// Whether delimiters fit around `content`, past its nested ones, between source chars `before`
+    /// and `after` (`None`: an edge); `joined`: the opener extends the closing run just before it.
     pub(in crate::serializing::md) fn fits(
         self,
         before: Option<char>,

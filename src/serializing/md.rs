@@ -9,21 +9,24 @@
 //!
 //! The one rule: **write nothing until it is known what it should be.** The separator between
 //! blocks, the space an svg or option leaves, a trailing space, hard breaks and an emphasis run
-//! are owed, and settled when the next visible content arrives. Nothing reads back, trims or
-//! re-indents text already written. Content is buffered only when a decision needs all of it
-//! (an emphasis run or link label for its visible edges, a table cell, a heading), each in a
-//! `BlockWriter::fragment` of its own. A table cell is the one exception to the rule: its
-//! finished text is trimmed in place before it is placed (`table.rs`).
+//! are owed, and settled when the next visible content arrives. A line break, once written,
+//! stays: nothing re-indents or re-breaks the lines before it. Only the end of the current line
+//! is read or edited (`Lines::edit_line`), as when a `!` before a link is escaped
+//! (`escape_trailing_bang`) or a code span is kept off the one before (`ends_with_code_span`).
+//! Content is buffered only when a decision needs all of it (an emphasis run or link label for
+//! its visible edges, a table cell, a heading), each in a `BlockWriter::fragment` of its own; a
+//! table cell and a heading drop their fragment's trailing `<br>` before placing it.
 //!
 //! # Where to look
 //!
 //! | Symptom | Rule |
 //! |---|---|
 //! | a space wrongly added or missing next to an svg or option | `inline::separator_is_space` |
-//! | `**` printed literally, or `<strong>` where `**` would do | `Emphasis::fits`, `Emphasis::can_merge` |
-//! | too many or too few blank lines between blocks | the `Block` edges, `Separator::write` |
+//! | a space lost or doubled at an emphasis edge | `Edges::of`, `inline::push_edge_space`; in text, `text_utils::push_words` |
+//! | `**` printed literally, or `<strong>` where `**` would do | `Emphasis::fits`, `Emphasis::can_merge`, `LastWritten::fuses`, `emphasis::fuses_ambiguously` |
+//! | too many or too few blank lines between blocks | `block::block_gap`, `Block::edges`, `BlockWriter::close_prefix` (an item's end seen from outside) |
 //! | a list loose when it should be tight, or the reverse | `block::item_gap`, `BlockWriter::list_gap` |
-//! | a lost `> ` or list indent | `LinePrefix`; `Lines` is the only writer of line breaks |
+//! | a lost `> ` or list indent | `BlockWriter::start_line`, `BlockWriter::item_indent`; `Lines` is the only writer of line breaks |
 //! | a table row split over two lines | `BlockWriter::owe` (what a cell caps a separator to) |
 //! | a missing or extra hard break | `BlockWriter::breaks_before`, `InlineWriter::hard_break` |
 //! | a missing or stray backslash | `text_utils` |

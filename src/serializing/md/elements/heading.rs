@@ -2,7 +2,7 @@ use crate::{Element, NodeId};
 
 use super::super::block::{Block, BlockWriter, Separator};
 use super::super::ctx::FormatOpts;
-use super::super::heading::{escape_closing_hashes, md_prefix};
+use super::super::heading::{escape_closing_hashes, heading_prefix};
 use super::super::host::MDHost;
 
 /// Writes a heading on one line, as an ATX heading ends at its line end.
@@ -31,7 +31,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         content = rest.trim_ascii_end();
     }
     let mut line = h.take_buf();
-    let prefix = md_prefix(&el.name);
+    let prefix = heading_prefix(&el.name);
     // an empty heading's line ends at its marker
     line.push_str(if content.is_empty() {
         prefix.trim_end()

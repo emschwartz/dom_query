@@ -164,47 +164,6 @@ fn junction_fits(left: &str, right: &str) -> bool {
     }
 }
 
-/// A run's content split for writing: edge spaces (`lead`) and a hard break at the start go
-/// before the delimiters, `core` between them, and `trail` then `hard_end` after them.
-pub(in crate::serializing::md) struct Edges<'a> {
-    pub(in crate::serializing::md) hard_start: bool,
-    pub(in crate::serializing::md) lead: &'a str,
-    pub(in crate::serializing::md) core: &'a str,
-    pub(in crate::serializing::md) trail: &'a str,
-    pub(in crate::serializing::md) hard_end: &'a str,
-}
-
-impl<'a> Edges<'a> {
-    pub(in crate::serializing::md) fn of(content: &'a str) -> Self {
-        let hard_start = starts_with_hard_break(content);
-        let rest = if hard_start {
-            content.get(3..).unwrap_or_default()
-        } else {
-            content
-        };
-        let core = rest.trim_start_matches(is_edge_space);
-        // spaces before a hard break stay with it
-        let lead = if core.starts_with('\n') {
-            ""
-        } else {
-            rest.strip_suffix(core).unwrap_or_default()
-        };
-        let rest = rest.strip_prefix(lead).unwrap_or(rest);
-        let (rest, hard_end) = rest
-            .strip_suffix("  \n")
-            .map_or((rest, ""), |r| (r, "  \n"));
-        let core = rest.trim_end_matches(is_edge_space);
-        let trail = rest.strip_prefix(core).unwrap_or_default();
-        Self {
-            hard_start,
-            lead,
-            core,
-            trail,
-            hard_end,
-        }
-    }
-}
-
 pub(in crate::serializing::md) fn write<H: MDHost>(
     h: &H,
     out: &mut BlockWriter,
@@ -274,12 +233,6 @@ pub(in crate::serializing::md) fn starts_with_hard_break(content: &str) -> bool 
     content
         .strip_prefix("  \n")
         .is_some_and(|rest| !rest.trim_start_matches(' ').starts_with('\n'))
-}
-
-/// `CommonMark` whitespace (`Zs`, tab, form feed, carriage return), which is moved outside
-/// the run; a newline stays with its hard break.
-fn is_edge_space(c: char) -> bool {
-    c.is_whitespace() && !matches!(c, '\n' | '\x0b' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }
 
 /// Common non-ASCII punctuation blocks; anything else (a letter, a mark, a

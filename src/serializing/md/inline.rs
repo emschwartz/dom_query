@@ -1,6 +1,6 @@
 use super::ctx::FormatOpts;
 use super::elements::code::ends_with_code_span;
-use super::elements::emphasis::{Edges, Emphasis};
+use super::elements::emphasis::{Emphasis, starts_with_hard_break};
 use super::lines::Lines;
 use super::text_utils::{
     escape_trailing_bang, push_block_space, push_md_url, push_title, push_words,
@@ -352,7 +352,7 @@ impl InlineWriter {
         if content.trim().is_empty() {
             return self.push_blank_emphasis(out, kind, content, first);
         }
-        let edges = Edges::of(content);
+        let edges = EmphasisEdges::of(content);
         // a hard break at the start goes before the run
         if edges.hard_start && (!self.at_line_start(out) || self.breaks > 0) {
             self.breaks += 1;
@@ -390,7 +390,7 @@ impl InlineWriter {
     }
 
     /// A run that ends in a hard break waits on nothing, so it is written at once.
-    fn write_if_hard_end(&mut self, out: &mut Lines, edges: &Edges) {
+    fn write_if_hard_end(&mut self, out: &mut Lines, edges: &EmphasisEdges) {
         if !edges.hard_end.is_empty() {
             self.settle(out, Some('\n'));
             self.breaks += 1;
@@ -520,7 +520,7 @@ impl LastWritten {
 
 impl EmphasisRun {
     /// A run of `kind` holding `edges`, in `content`, an empty buffer.
-    fn new(kind: Emphasis, mut content: String, start: LastWritten, edges: &Edges) -> Self {
+    fn new(kind: Emphasis, mut content: String, start: LastWritten, edges: &EmphasisEdges) -> Self {
         content.push_str(edges.core);
         let mut run = Self {
             kind,
@@ -541,7 +541,7 @@ impl EmphasisRun {
     }
 
     /// Appends the content of a run that merges with this one, after the space between them.
-    fn merge(&mut self, boundary_space: bool, edges: &Edges) {
+    fn merge(&mut self, boundary_space: bool, edges: &EmphasisEdges) {
         let gap = std::mem::take(&mut self.trail);
         push_edge_space(&mut self.content, &gap);
         if boundary_space {
@@ -556,7 +556,7 @@ impl EmphasisRun {
         self.set_trail(edges);
     }
 
-    fn set_trail(&mut self, edges: &Edges) {
+    fn set_trail(&mut self, edges: &EmphasisEdges) {
         push_edge_space(&mut self.trail, edges.trail);
     }
 }
@@ -578,4 +578,51 @@ fn push_edge_space(acc: &mut String, space: &str) {
             acc.push(c);
         }
     }
+}
+
+/// A run's content split for writing: edge spaces (`lead`) and a hard break at the start go
+/// before the delimiters, `core` between them, and `trail` then `hard_end` after them.
+struct EmphasisEdges<'a> {
+    hard_start: bool,
+    lead: &'a str,
+    core: &'a str,
+    trail: &'a str,
+    hard_end: &'a str,
+}
+
+impl<'a> EmphasisEdges<'a> {
+    fn of(content: &'a str) -> Self {
+        let hard_start = starts_with_hard_break(content);
+        let rest = if hard_start {
+            content.get(3..).unwrap_or_default()
+        } else {
+            content
+        };
+        let core = rest.trim_start_matches(is_edge_space);
+        // spaces before a hard break stay with it
+        let lead = if core.starts_with('\n') {
+            ""
+        } else {
+            rest.strip_suffix(core).unwrap_or_default()
+        };
+        let rest = rest.strip_prefix(lead).unwrap_or(rest);
+        let (rest, hard_end) = rest
+            .strip_suffix("  \n")
+            .map_or((rest, ""), |r| (r, "  \n"));
+        let core = rest.trim_end_matches(is_edge_space);
+        let trail = rest.strip_prefix(core).unwrap_or_default();
+        Self {
+            hard_start,
+            lead,
+            core,
+            trail,
+            hard_end,
+        }
+    }
+}
+
+/// `CommonMark` whitespace (`Zs`, tab, form feed, carriage return), which is moved outside
+/// the run; a newline stays with its hard break.
+fn is_edge_space(c: char) -> bool {
+    c.is_whitespace() && !matches!(c, '\n' | '\x0b' | '\u{85}' | '\u{2028}' | '\u{2029}')
 }

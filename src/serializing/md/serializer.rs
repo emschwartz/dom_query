@@ -103,7 +103,7 @@ fn open_block(out: &mut BlockWriter, name: &QualName, opts: FormatOpts) {
         // a `---` line could underline the text above it in an item; a cell has no line for
         // a rule in an item
         if name.local == local_name!("hr") && !opts.table_cell {
-            out.push_block(Block::Rule, if out.in_item() { "***" } else { "---" });
+            out.push_block(Block::Rule, if out.in_list_item() { "***" } else { "---" });
         } else if name.local == local_name!("hr") && !opts.list_item {
             out.push_raw("---");
         }
@@ -273,7 +273,8 @@ mod tests {
     use crate::Document;
 
     #[test]
-    fn test_block_with_text_only_on_a_middle_line_sets_its_item_end() {
+    fn test_item_end_from_middle_line() {
+        // a block whose text is only on a middle line still sets its item end
         let mut out = BlockWriter::document(String::new(), FormatOpts::new());
         out.open_prefix(LinePrefix::ListItem {
             marker: "- ".to_string(),

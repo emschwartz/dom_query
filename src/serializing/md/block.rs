@@ -656,17 +656,17 @@ impl BlockWriter {
     }
 
     /// Whether the next block is a block of a list item.
-    pub(super) fn in_item(&self) -> bool {
+    pub(super) fn in_list_item(&self) -> bool {
         self.frames.last().is_some_and(Frame::is_item)
     }
 
     /// The innermost list item, if the next block is one of its blocks.
-    fn item(&mut self) -> Option<&mut Frame> {
+    fn innermost_list_item(&mut self) -> Option<&mut Frame> {
         self.frames.last_mut().filter(|f| f.is_item())
     }
 
     fn set_item_end(&mut self, end: BlockEnd) {
-        if let Some(item) = self.item() {
+        if let Some(item) = self.innermost_list_item() {
             item.item_end = end;
         }
     }

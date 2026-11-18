@@ -127,11 +127,12 @@ fn has_nested_table(table: &NodeRef) -> bool {
 }
 
 fn push_cells(text: &mut String, cells: &[String]) {
-    for (i, cell) in cells.iter().enumerate() {
-        if i > 0 {
+    if let Some((first, rest)) = cells.split_first() {
+        text.push_str(first);
+        for cell in rest {
             text.push_str(" | ");
+            text.push_str(cell);
         }
-        text.push_str(cell);
     }
 }
 

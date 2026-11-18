@@ -25,7 +25,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
     let list = NodeRef::new(id, h.tree());
     let has_items = list.children_it(false).any(|c| c.has_name("li"));
     // a list right after one of the same type takes the other marker, or the two would merge
-    let alt = !opts.table_cell && has_items && should_use_alt_marker(h, &el.name.local);
+    let use_alt_marker = !opts.table_cell && has_items && should_use_alt_marker(h, &el.name.local);
     let mut item_opts = opts.list_item();
     item_opts.include_node = false;
     // content directly in the list is no item's: it keeps only the cell and emphasis rules
@@ -71,7 +71,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
             // `<li value>` renumbers this item and the ones after it
             number = list_number(&child, "value").unwrap_or(number);
         }
-        let marker = match (ordered, alt) {
+        let marker = match (ordered, use_alt_marker) {
             (true, false) => format!("{number}. "),
             (true, true) => format!("{number}) "),
             (false, true) => "* ".to_owned(),
@@ -84,7 +84,7 @@ pub(in crate::serializing::md) fn write<H: MDHost>(
         preceding = Preceding::Item(out.close_prefix().unwrap_or(BlockEnd::Closed));
     }
     if has_items {
-        h.set_last_list(id, alt);
+        h.set_last_list(id, use_alt_marker);
     }
     // without a line end, text after the list would continue its last item
     out.owe(Separator::BlankLine);

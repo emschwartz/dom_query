@@ -1,6 +1,6 @@
 use html5ever::{QualName, local_name};
 
-pub(super) const fn md_prefix(name: &QualName) -> &'static str {
+pub(super) const fn heading_prefix(name: &QualName) -> &'static str {
     match name.local {
         local_name!("h1") => "# ",
         local_name!("h2") => "## ",

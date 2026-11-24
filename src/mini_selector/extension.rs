@@ -49,25 +49,33 @@ fn collect_matching_descendants(
 
 /// Returns `ids` once each in document order. With `outermost`, drops nodes inside another one
 /// of them: a following descendant step finds their matches from the outer node anyway.
-fn in_document_order(
+fn restore_document_order(
     nodes: &Ref<'_, Vec<TreeNode>>,
     root: &NodeId,
     ids: &[NodeId],
     outermost: bool,
 ) -> Vec<NodeId> {
     let found: BitSet = ids.iter().map(|id| id.value()).collect();
-    let mut inside = BitSet::new();
     let mut ordered = Vec::with_capacity(ids.len());
-    for id in descendant_nodes(Ref::clone(nodes), root) {
-        let in_found = found.contains(id.value());
-        let in_outer = nodes[id.value()]
+    let descendants = descendant_nodes(Ref::clone(nodes), root);
+
+    if !outermost {
+        ordered.extend(descendants.filter(|id| found.contains(id.value())));
+        return ordered;
+    }
+
+    let mut inside = BitSet::new();
+    for id in descendants {
+        let id_val = id.value();
+        let in_found = found.contains(id_val);
+        let in_outer = nodes[id_val]
             .parent
             .is_some_and(|p| inside.contains(p.value()));
-        if in_found && !(outermost && in_outer) {
-            ordered.push(id);
-        }
         if in_found || in_outer {
-            inside.insert(id.value());
+            inside.insert(id_val);
+        }
+        if in_found && !in_outer {
+            ordered.push(id);
         }
     }
     ordered
@@ -82,18 +90,27 @@ fn find_descendants<'a, 'b>(
     // Start with the provided node ID as the initial working set
     let mut stack = vec![node.id];
     let mut iter_stack = Vec::new();
-    // Set when the working set may hold nested nodes, so each step's result needs ordering and dedup.
+    // Whether the working set may hold nested nodes, and whether it may be out of document order.
     let mut nested = false;
+    let mut unordered = false;
 
     // Parse the CSS selector list and process each selector sequentially
     let (_, selectors) = parse_selector_list(path)?;
+    // A leading `+`/`~` starts outside this node, so it can never yield descendants.
+    if selectors
+        .first()
+        .is_some_and(|s| matches!(s.combinator, Combinator::Adjacent | Combinator::Sibling))
+    {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            path,
+            nom::error::ErrorKind::Fail,
+        )));
+    }
     for (idx, sel) in selectors.iter().enumerate() {
-        let is_last = selectors.len() - 1 == idx;
         let next_is_descendant = selectors
             .get(idx + 1)
             .is_some_and(|s| matches!(s.combinator, Combinator::Descendant));
         let descend_into_matches = !next_is_descendant;
-        nested |= !is_last && descend_into_matches;
         let mut new_stack = vec![];
 
         match sel.combinator {
@@ -147,9 +164,23 @@ fn find_descendants<'a, 'b>(
             }
         }
         stack = new_stack;
-        if nested && stack.len() > 1 {
-            stack = in_document_order(&nodes, &node.id, &stack, next_is_descendant);
+        // A descendant step from disjoint roots emits document order; any other step keeps the
+        // disorder of its input, which is the nestedness of the previous step.
+        if matches!(sel.combinator, Combinator::Descendant) {
+            nested = descend_into_matches;
+            unordered = false;
+        } else {
+            unordered = nested;
         }
+        // Drop inner matches before a descendant step, or it walks them again for each ancestor.
+        if nested && next_is_descendant && stack.len() > 1 {
+            stack = restore_document_order(&nodes, &node.id, &stack, true);
+            nested = false;
+            unordered = false;
+        }
+    }
+    if unordered && stack.len() > 1 {
+        stack = restore_document_order(&nodes, &node.id, &stack, false);
     }
     Ok(stack
         .into_iter()
@@ -197,7 +228,7 @@ impl NodeRef<'_> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the CSS selector is invalid.
+    /// Returns an error if the CSS selector is invalid or starts with a `+` or `~` combinator.
     pub fn try_find_descendants<'a>(
         &self,
         css_path: &'a str,
@@ -358,6 +389,20 @@ mod tests {
             let got_ids: Vec<NodeId> = root.find_descendants(sel).iter().map(|n| n.id).collect();
             assert!(!expected_ids.is_empty(), "{sel}");
             assert_eq!(got_ids, expected_ids, "{sel}");
+        }
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+    fn test_node_find_descendants_leading_combinator() {
+        // A leading `+`/`~` starts outside the receiver, so it can never yield descendants.
+        let contents =
+            r#"<main><div id="a"></div><p id="p1"><span id="s1"></span></p><p id="p2"></p></main>"#;
+        let doc = Document::from(contents);
+        let a = doc.select_single("#a").nodes()[0];
+        for sel in ["+ p > span", "~ p > span", "~ p ~ p", "~ p span > i"] {
+            assert!(a.try_find_descendants(sel).is_err(), "{sel}");
+            assert!(a.find_descendants(sel).is_empty(), "{sel}");
         }
     }
 
